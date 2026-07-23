@@ -201,7 +201,16 @@
         .topbar .user-info {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 12px;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 30px;
+            transition: var(--transition);
+            user-select: none;
+        }
+        
+        .topbar .user-info:hover {
+            background: var(--background);
         }
         
         .topbar .user-info .avatar {
@@ -234,22 +243,19 @@
             color: #6c757d;
         }
         
-        .topbar .user-info .dropdown-toggle {
-            background: none;
-            border: none;
+        .topbar .user-info .dropdown-chevron {
             color: var(--text);
-            cursor: pointer;
-            padding: 8px;
-            border-radius: 8px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.6;
             transition: var(--transition);
+            padding: 4px;
         }
         
-        .topbar .user-info .dropdown-toggle:hover {
-            background: var(--background);
-        }
-        
-        .topbar .user-info .dropdown-toggle::after {
-            margin-left: 8px;
+        .topbar .user-info:hover .dropdown-chevron {
+            opacity: 1;
         }
         
         /* ========== Main Content ========== */

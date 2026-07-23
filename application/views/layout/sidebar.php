@@ -29,14 +29,16 @@
         background: var(--rc-white);
         border-right: 1px solid var(--rc-line);
         box-shadow: 3px 0 20px rgba(11, 61, 41, 0.05);
-        z-index: 1040;
+        z-index: 1050;
         transition: transform .28s cubic-bezier(.4, 0, .2, 1);
         font-family: 'Inter', 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+        overflow-x: hidden !important;
     }
 
     /* thin custom scrollbar for the nav list */
     #sidebar .components {
         overflow-y: auto;
+        overflow-x: hidden !important;
         scrollbar-width: thin;
         scrollbar-color: var(--rc-line) transparent;
     }
@@ -54,8 +56,9 @@
     .sidebar-header {
         position: relative;
         text-align: center;
-        padding: 1.15rem 1rem .9rem;
+        padding: 2.2rem 1.5rem 1.6rem;
         flex-shrink: 0;
+        background: var(--rc-white) !important;
     }
 
     .sidebar-header::after {
@@ -69,11 +72,36 @@
     }
 
     .sidebar-logo {
-        max-width: 108px;
+        max-width: 145px;
         width: 100%;
         height: auto;
         display: block;
         margin: 0 auto;
+    }
+
+    /* ---------- Close Button (Mobile only) ---------- */
+    .sidebar-close-btn {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: rgba(11, 61, 41, 0.05);
+        border: none;
+        font-size: 18px;
+        color: var(--rc-muted);
+        cursor: pointer;
+        padding: 6px;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+    }
+    
+    .sidebar-close-btn:hover {
+        background: rgba(220, 53, 69, 0.1);
+        color: #c0293a;
     }
 
     /* ---------- Nav list ---------- */
@@ -193,27 +221,87 @@
         inset: 0;
         background: rgba(11, 61, 41, .35);
         backdrop-filter: blur(2px);
-        z-index: 1030;
+        z-index: 1045;
         opacity: 0;
         visibility: hidden;
         transition: opacity .25s ease, visibility .25s ease;
     }
 
-    .sidebar-overlay.show {
-        opacity: 1;
-        visibility: visible;
+    @media (max-width: 991.98px) {
+        .sidebar-overlay.show,
+        .sidebar-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
     }
 
     /* ---------- Responsive behavior ---------- */
     @media (min-width: 992px) {
         #sidebar {
             transform: translateX(0);
+            transition: width .28s cubic-bezier(.4, 0, .2, 1);
+        }
+
+        #sidebar.active {
+            width: 80px;
+            min-width: 80px;
+            max-width: 80px;
+            margin-left: 0; /* override header.php */
+        }
+
+        /* ---------- Collapsed/Mini Sidebar states (Desktop only) ---------- */
+        #sidebar.active .sidebar-logo {
+            display: none !important;
+        }
+        
+        #sidebar.active .mini-logo {
+            display: block !important;
+        }
+        
+        #sidebar.active .sidebar-header {
+            padding: 1.5rem 0.5rem;
+        }
+
+        #sidebar.active .sidebar-header::after {
+            display: none;
+        }
+
+        #sidebar.active .components a span,
+        #sidebar.active .sidebar-footer a span {
+            display: none !important;
+        }
+
+        #sidebar.active .components a,
+        #sidebar.active .sidebar-footer a {
+            justify-content: center;
+            padding: 0.68rem 0;
+            gap: 0;
+        }
+
+        #sidebar.active .components a i,
+        #sidebar.active .sidebar-footer a i {
+            margin: 0;
+        }
+
+        #sidebar.active .components a.active::before {
+            left: 0;
+        }
+
+        #sidebar.active .sidebar-footer {
+            padding: 0.85rem 0;
         }
 
         /* push page content over when sidebar is present */
         .rc-page-wrapper,
         #content {
             margin-left: var(--rc-sidebar-w);
+            transition: margin-left .28s cubic-bezier(.4, 0, .2, 1), width .28s cubic-bezier(.4, 0, .2, 1);
+        }
+
+        #sidebar.active ~ #content,
+        #sidebar.active ~ #content.active {
+            margin-left: 80px;
+            width: calc(100% - 80px);
         }
     }
 
@@ -222,7 +310,8 @@
             transform: translateX(-100%);
         }
 
-        #sidebar.show {
+        #sidebar.show,
+        #sidebar.active {
             transform: translateX(0);
         }
 
@@ -237,7 +326,13 @@
 <nav id="sidebar">
 
     <div class="sidebar-header">
-        <img src="<?php echo base_url('assets/recomm-logo-sidebar.png'); ?>" alt="ReComm" class="sidebar-logo">
+        <button type="button" class="sidebar-close-btn d-lg-none">
+            <i class="fas fa-times"></i>
+        </button>
+        <img src="<?php echo base_url('assets/recomm-logo.png'); ?>" alt="ReComm" class="sidebar-logo">
+        <div class="mini-logo" style="display: none; text-align: center;">
+            <div style="width: 40px; height: 40px; background: linear-gradient(135deg, var(--rc-green-600), var(--rc-green-500)); color: #fff; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.3rem; box-shadow: 0 4px 10px rgba(31, 157, 99, 0.2);">R</div>
+        </div>
     </div>
 
     <ul class="components">
@@ -289,53 +384,4 @@
 
 <!-- Sidebar Overlay for Mobile -->
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
-
-<script>
-    (function() {
-        var sidebar = document.getElementById('sidebar');
-        var overlay = document.getElementById('sidebarOverlay');
-
-        function openSidebar() {
-            sidebar.classList.add('show');
-            overlay.classList.add('show');
-            document.body.style.overflow = 'hidden';
-        }
-
-        function closeSidebar() {
-            sidebar.classList.remove('show');
-            overlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-
-        function toggleSidebar() {
-            sidebar.classList.contains('show') ? closeSidebar() : openSidebar();
-        }
-
-        // Expose globally so your header's hamburger button can call it,
-        // e.g. <button onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
-        window.toggleSidebar = toggleSidebar;
-        window.closeSidebar = closeSidebar;
-
-        // Also auto-bind common existing hooks so you don't have to touch the header
-        document.addEventListener('click', function(e) {
-            if (e.target.closest('#sidebarToggle, .sidebar-toggle, [data-sidebar-toggle]')) {
-                toggleSidebar();
-            }
-        });
-
-        // Tapping the dark overlay closes the drawer
-        overlay.addEventListener('click', closeSidebar);
-
-        // Close automatically when a nav link is tapped on mobile
-        sidebar.querySelectorAll('.components a').forEach(function(link) {
-            link.addEventListener('click', function() {
-                if (window.innerWidth < 992) closeSidebar();
-            });
-        });
-
-        // Reset state cleanly when resizing across the breakpoint
-        window.addEventListener('resize', function() {
-            if (window.innerWidth >= 992) closeSidebar();
-        });
-    })();
-</script>
+

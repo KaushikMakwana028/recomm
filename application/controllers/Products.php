@@ -149,17 +149,22 @@ class Products extends MY_Controller
                         </div>
                     </td>
                     <td class="text-center">
-                        <a href="' . base_url('products/edit/' . (int)$product->id) . '" 
-                           class="btn btn-sm btn-info" title="Edit">
-                            <i class="fas fa-edit"></i>
-                        </a>
-                        <button type="button"
-                                class="btn btn-sm btn-danger btn-delete"
-                                data-id="' . (int)$product->id . '"
-                                data-name="' . htmlspecialchars($product->name, ENT_QUOTES, 'UTF-8') . '"
-                                title="Delete">
-                            <i class="fas fa-trash"></i>
-                        </button>
+                        <div class="d-flex align-items-center justify-content-center gap-2">
+                            <a href="' . base_url('products/edit/' . (int)$product->id) . '" 
+                               class="rc-btn-icon edit" 
+                               title="Edit"
+                               aria-label="Edit ' . htmlspecialchars($product->name, ENT_QUOTES, 'UTF-8') . '">
+                                <i class="fas fa-edit"></i>
+                            </a>
+                            <button type="button"
+                                    class="rc-btn-icon delete btn-delete"
+                                    data-id="' . (int)$product->id . '"
+                                    data-name="' . htmlspecialchars($product->name, ENT_QUOTES, 'UTF-8') . '"
+                                    title="Delete"
+                                    aria-label="Delete ' . htmlspecialchars($product->name, ENT_QUOTES, 'UTF-8') . '">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
                     </td>
                 </tr>
             ';
@@ -563,6 +568,9 @@ class Products extends MY_Controller
             show_404();
         }
 
+        set_time_limit(600);
+        ini_set('memory_limit', '512M');
+
         if (empty($_FILES['bulk_file']['name'])) {
             echo json_encode(['status' => false, 'message' => 'Please select a file to upload']);
             return;
@@ -601,6 +609,37 @@ class Products extends MY_Controller
             $category_map[strtolower(trim($cat->name))] = $cat->id;
         }
 
+        // 1. Collect and deduplicate all remote URLs to validate in parallel
+        $urls_to_validate = [];
+        foreach ($rows as $index => $row) {
+            $name        = trim($row['product_name'] ?? '');
+            $category    = trim($row['category'] ?? '');
+            $price       = trim($row['regular_price'] ?? '');
+            $sale_price  = trim($row['sale_price'] ?? '');
+            $image_url   = trim($row['main_image'] ?? '');
+            $gallery_raw = trim($row['gallery_images'] ?? '');
+
+            // skip fully blank lines
+            if ($name === '' && $category === '' && $price === '' && $sale_price === '' && $image_url === '') {
+                continue;
+            }
+
+            if ($image_url !== '') {
+                $urls_to_validate[] = $image_url;
+            }
+            if ($gallery_raw !== '') {
+                $gallery_urls = array_filter(array_map('trim', explode('|', $gallery_raw)));
+                foreach ($gallery_urls as $g_url) {
+                    $urls_to_validate[] = $g_url;
+                }
+            }
+        }
+        $urls_to_validate = array_unique($urls_to_validate);
+
+        // 2. Perform parallel validation check on all remote URLs
+        $validation_results = $this->validate_remote_images_parallel($urls_to_validate);
+
+        // 3. Process records and build error report using pre-fetched validation results
         $errors         = [];
         $valid_products = [];
 
@@ -655,7 +694,7 @@ class Products extends MY_Controller
             } elseif (stripos($image_url, 'https://') !== 0) {
                 $row_errors[] = 'Main Image must be a valid HTTPS URL';
             } else {
-                $check = $this->validate_remote_image($image_url);
+                $check = $validation_results[$image_url] ?? 'Could not validate image';
                 if ($check !== true) {
                     $row_errors[] = 'Main Image: ' . $check;
                 }
@@ -669,7 +708,7 @@ class Products extends MY_Controller
                         $row_errors[] = 'Gallery Image URL must be HTTPS: ' . $g_url;
                         continue;
                     }
-                    $g_check = $this->validate_remote_image($g_url);
+                    $g_check = $validation_results[$g_url] ?? 'Could not validate image';
                     if ($g_check !== true) {
                         $row_errors[] = 'Gallery Image (' . $g_url . '): ' . $g_check;
                     }
@@ -708,31 +747,85 @@ class Products extends MY_Controller
             return;
         }
 
-        // All rows valid -- download images and insert
-        $this->db->trans_start();
+        // 4. Collect and deduplicate image download tasks
+        $url_to_filename = [];
+        $distinct_downloads = [];
 
-        $inserted          = 0;
-        $downloaded_files  = [];
+        foreach ($valid_products as $idx => $p) {
+            $urls = array_merge([$p['image_url']], $p['gallery_urls']);
+            foreach ($urls as $url) {
+                if ($url === '') continue;
+                if (!isset($url_to_filename[$url])) {
+                    $ext = strtolower(pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION));
+                    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
+                        $ext = 'jpg';
+                    }
+                    $filename = md5(uniqid('', true)) . '.' . $ext;
 
-        foreach ($valid_products as $p) {
-            $image_path = $this->download_remote_image($p['image_url'], './assets/uploads/products/');
-            if (!$image_path) {
-                $this->db->trans_rollback();
-                $this->cleanup_files($downloaded_files);
-                echo json_encode(['status' => false, 'message' => 'Failed to download image for "' . $p['name'] . '". No products were added.']);
-                return;
-            }
-            $downloaded_files[] = $image_path;
+                    $is_gallery = in_array($url, $p['gallery_urls']);
+                    $dest = $is_gallery ? './assets/uploads/products/gallery/' . $filename : './assets/uploads/products/' . $filename;
+                    $rel = $is_gallery ? 'assets/uploads/products/gallery/' . $filename : 'assets/uploads/products/' . $filename;
 
-            $gallery_paths = [];
-            foreach ($p['gallery_urls'] as $g_url) {
-                $g_path = $this->download_remote_image($g_url, './assets/uploads/products/gallery/');
-                if ($g_path) {
-                    $gallery_paths[]     = $g_path;
-                    $downloaded_files[]  = $g_path;
+                    $url_to_filename[$url] = [
+                        'destination' => $dest,
+                        'relative_path' => $rel
+                    ];
+
+                    $distinct_downloads[] = [
+                        'url' => $url,
+                        'destination' => $dest,
+                        'relative_path' => $rel
+                    ];
                 }
             }
+        }
 
+        // 5. Download distinct images in parallel
+        $download_results = $this->download_remote_images_parallel($distinct_downloads);
+
+        $downloaded_files = [];
+        $failed_p_name = null;
+
+        // Verify and map paths to products
+        foreach ($valid_products as &$p) {
+            $main_url = $p['image_url'];
+            $main_res = $download_results[$main_url] ?? false;
+
+            if ($main_res === false) {
+                $failed_p_name = $p['name'];
+                break;
+            }
+
+            $p['local_image'] = $main_res;
+
+            $p['local_gallery'] = [];
+            foreach ($p['gallery_urls'] as $g_url) {
+                $g_res = $download_results[$g_url] ?? false;
+                if ($g_res !== false) {
+                    $p['local_gallery'][] = $g_res;
+                }
+            }
+        }
+        unset($p);
+
+        // Collect downloaded files on disk for cleanup
+        foreach ($download_results as $url => $res) {
+            if ($res !== false) {
+                $downloaded_files[] = $url_to_filename[$url]['destination'];
+            }
+        }
+
+        if ($failed_p_name !== null) {
+            $this->cleanup_files($downloaded_files);
+            echo json_encode(['status' => false, 'message' => 'Failed to download image for "' . $failed_p_name . '". No products were added.']);
+            return;
+        }
+
+        // 6. DB Transaction insert
+        $this->db->trans_start();
+
+        $inserted = 0;
+        foreach ($valid_products as $p) {
             $slug = $this->generateSlug($p['name']);
             if ($this->gm->exists('products', ['slug' => $slug])) {
                 $slug = $slug . '-' . time() . rand(10, 99);
@@ -746,8 +839,8 @@ class Products extends MY_Controller
                 'price'       => $p['price'],
                 'sale_price'  => $p['sale_price'],
                 'sku'         => $p['sku'] ?: NULL,
-                'image'       => $image_path,
-                'gallery'     => !empty($gallery_paths) ? json_encode($gallery_paths) : NULL,
+                'image'       => $p['local_image'],
+                'gallery'     => !empty($p['local_gallery']) ? json_encode($p['local_gallery']) : NULL,
                 'is_active'   => 1,
                 'created_by'  => 'admin',
                 'created_on'  => date('Y-m-d H:i:s')
@@ -790,8 +883,14 @@ class Products extends MY_Controller
                 fclose($handle);
             }
         } else {
-            $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($tmp_path);
-            $reader->setReadDataOnly(true);
+            // Load via PhpSpreadsheet / PHPExcel
+            require_once APPPATH . '../vendor/autoload.class.php';
+            if (!class_exists('PhpOffice\PhpSpreadsheet\IOFactory')) {
+                // Try to load PHPExcel if PhpSpreadsheet doesn't exist
+                $reader = PHPExcel_IOFactory::createReaderForFile($tmp_path);
+            } else {
+                $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($tmp_path);
+            }
             $sheet = $reader->load($tmp_path)->getActiveSheet();
             $data  = $sheet->toArray(null, true, true, false);
 
@@ -809,78 +908,162 @@ class Products extends MY_Controller
         return $rows;
     }
 
-    // Check a remote image (HEAD request) is reachable, an image, and <=1MB — without downloading it
-    private function validate_remote_image($url)
+    // Parallel remote image validation (HEAD requests using curl_multi)
+    private function validate_remote_images_parallel($urls)
     {
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_NOBODY, true);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        curl_exec($ch);
-
-        if (curl_errno($ch)) {
-            $err = curl_error($ch);
-            curl_close($ch);
-            return 'Could not reach image URL (' . $err . ')';
+        $results = [];
+        if (empty($urls)) {
+            return $results;
         }
 
-        $http_code      = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $content_type   = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-        $content_length = curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
-        curl_close($ch);
+        $chunks = array_chunk($urls, 100);
+        foreach ($chunks as $chunk) {
+            $mh = curl_multi_init();
+            $handles = [];
 
-        if ($http_code != 200) {
-            return 'Image URL not reachable (HTTP ' . $http_code . ')';
-        }
-        if (!$content_type || stripos($content_type, 'image/') !== 0) {
-            return 'URL does not point to a valid image';
-        }
-        if ($content_length > 0 && $content_length > 1048576) {
-            return 'Image size exceeds 1MB';
+            foreach ($chunk as $url) {
+                $ch = curl_init($url);
+                curl_setopt($ch, CURLOPT_NOBODY, true);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 8);
+
+                curl_multi_add_handle($mh, $ch);
+                $handles[$url] = $ch;
+            }
+
+            $active = null;
+            do {
+                $mrc = curl_multi_exec($mh, $active);
+            } while ($mrc == CURLM_CALL_MULTI_PERFORM);
+
+            while ($active && $mrc == CURLM_OK) {
+                if (curl_multi_select($mh) != -1) {
+                    do {
+                        $mrc = curl_multi_exec($mh, $active);
+                    } while ($mrc == CURLM_CALL_MULTI_PERFORM);
+                } else {
+                    usleep(100);
+                    do {
+                        $mrc = curl_multi_exec($mh, $active);
+                    } while ($mrc == CURLM_CALL_MULTI_PERFORM);
+                }
+            }
+
+            foreach ($handles as $url => $ch) {
+                if (curl_errno($ch)) {
+                    $err = curl_error($ch);
+                    $results[$url] = 'Could not reach image URL (' . $err . ')';
+                } else {
+                    $http_code      = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $content_type   = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+                    $content_length = curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
+
+                    if ($http_code != 200) {
+                        $results[$url] = 'Image URL not reachable (HTTP ' . $http_code . ')';
+                    } elseif (!$content_type || stripos($content_type, 'image/') !== 0) {
+                        $results[$url] = 'URL does not point to a valid image';
+                    } elseif ($content_length > 0 && $content_length > 1048576) {
+                        $results[$url] = 'Image size exceeds 1MB';
+                    } else {
+                        $results[$url] = true;
+                    }
+                }
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+            }
+            curl_multi_close($mh);
         }
 
-        return true;
+        return $results;
     }
 
-    // Download a remote image to local storage
-    private function download_remote_image($url, $upload_path)
+    // Parallel remote image downloading (GET requests using curl_multi)
+    private function download_remote_images_parallel($downloads)
     {
-        if (!is_dir($upload_path)) {
-            mkdir($upload_path, 0777, true);
+        $results = [];
+        if (empty($downloads)) {
+            return $results;
         }
 
-        $ext = strtolower(pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION));
-        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
-            $ext = 'jpg';
-        }
-        $filename    = md5(uniqid('', true)) . '.' . $ext;
-        $destination = rtrim($upload_path, '/') . '/' . $filename;
+        $chunks = array_chunk($downloads, 50);
+        foreach ($chunks as $chunk) {
+            $mh = curl_multi_init();
+            $handles = [];
 
-        $fp = fopen($destination, 'w');
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_FILE, $fp);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 20);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        $success   = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        fclose($fp);
+            foreach ($chunk as $item) {
+                $url  = $item['url'];
+                $dest = $item['destination'];
+                $rel  = $item['relative_path'];
 
-        if (!$success || $http_code != 200 || !file_exists($destination) || filesize($destination) === 0) {
-            if (file_exists($destination)) unlink($destination);
-            return false;
-        }
-        if (filesize($destination) > 1048576) {
-            unlink($destination);
-            return false;
+                $dir = dirname($dest);
+                if (!is_dir($dir)) {
+                    mkdir($dir, 0777, true);
+                }
+
+                $fp = fopen($dest, 'w');
+                $ch = curl_init($url);
+                curl_setopt($ch, CURLOPT_FILE, $fp);
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+                curl_multi_add_handle($mh, $ch);
+                $handles[$url] = [
+                    'ch'   => $ch,
+                    'dest' => $dest,
+                    'rel'  => $rel,
+                    'fp'   => $fp
+                ];
+            }
+
+            $active = null;
+            do {
+                $mrc = curl_multi_exec($mh, $active);
+            } while ($mrc == CURLM_CALL_MULTI_PERFORM);
+
+            while ($active && $mrc == CURLM_OK) {
+                if (curl_multi_select($mh) != -1) {
+                    do {
+                        $mrc = curl_multi_exec($mh, $active);
+                    } while ($mrc == CURLM_CALL_MULTI_PERFORM);
+                } else {
+                    usleep(100);
+                    do {
+                        $mrc = curl_multi_exec($mh, $active);
+                    } while ($mrc == CURLM_CALL_MULTI_PERFORM);
+                }
+            }
+
+            foreach ($handles as $url => $info) {
+                $ch   = $info['ch'];
+                $dest = $info['dest'];
+                $rel  = $info['rel'];
+                $fp   = $info['fp'];
+
+                $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $success   = !curl_errno($ch);
+
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+                fclose($fp);
+
+                if (!$success || $http_code != 200 || !file_exists($dest) || filesize($dest) === 0 || filesize($dest) > 1048576) {
+                    if (file_exists($dest)) {
+                        unlink($dest);
+                    }
+                    $results[$url] = false;
+                } else {
+                    $results[$url] = $rel;
+                }
+            }
+            curl_multi_close($mh);
         }
 
-        return $upload_path === './assets/uploads/products/'
-            ? 'assets/uploads/products/' . $filename
-            : 'assets/uploads/products/gallery/' . $filename;
+        return $results;
     }
 
     private function cleanup_files($paths)

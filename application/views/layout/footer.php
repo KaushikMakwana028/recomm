@@ -13,16 +13,20 @@
 <script>
 $(document).ready(function() {
     // Sidebar toggle for desktop and mobile
-    $('#sidebarCollapse, #sidebarOverlay').on('click', function() {
+    $('#sidebarCollapse, #sidebarOverlay, .sidebar-close-btn').on('click', function() {
         $('#sidebar').toggleClass('active');
         $('#content').toggleClass('active');
         $('#sidebarOverlay').toggleClass('active');
         
-        // Change icon
+        // Change icon and handle overflow on mobile
         if ($('#sidebar').hasClass('active')) {
             $('#sidebarCollapse i').removeClass('fa-bars').addClass('fa-times');
+            if ($(window).width() <= 991) {
+                $('body').css('overflow', 'hidden');
+            }
         } else {
             $('#sidebarCollapse i').removeClass('fa-times').addClass('fa-bars');
+            $('body').css('overflow', '');
         }
     });
     
@@ -38,6 +42,7 @@ $(document).ready(function() {
             $('#content').removeClass('active');
             $('#sidebarOverlay').removeClass('active');
             $('#sidebarCollapse i').removeClass('fa-times').addClass('fa-bars');
+            $('body').css('overflow', '');
         });
     }
     
@@ -48,6 +53,7 @@ $(document).ready(function() {
             $('#content').removeClass('active');
             $('#sidebarOverlay').removeClass('active');
             $('#sidebarCollapse i').removeClass('fa-times').addClass('fa-bars');
+            $('body').css('overflow', '');
         }
     });
 });

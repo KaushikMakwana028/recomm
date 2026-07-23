@@ -1,57 +1,409 @@
-<div class="page-header">
-    <div>
-        <h1><i class="fas fa-list me-2"></i>Categories</h1>
-        <nav aria-label="breadcrumb">
-            <ol class="breadcrumb">
-                <li class="breadcrumb-item"><a href="<?= base_url('dashboard') ?>">Dashboard</a></li>
-                <li class="breadcrumb-item active" aria-current="page">Categories</li>
-            </ol>
-        </nav>
-    </div>
-    <a href="<?= base_url('categories/add') ?>" class="btn btn-primary">
-        <i class="fas fa-plus me-2"></i>Add Category
-    </a>
-</div>
+<style>
+    /* Styling variables and custom elements for categories */
+    :root {
+        --rc-forest-900: #07271b;
+        --rc-forest-800: #0b3d29;
+        --rc-forest-700: #0f5c3e;
+        --rc-green-600: #16794f;
+        --rc-green-500: #1f9d63;
+        --rc-emerald-400: #2ecc71;
+        --rc-lime-300: #7ee8a8;
+        --rc-gold-500: #f2a93b;
+        --rc-gold-400: #f7c469;
 
-<!-- Flash Messages -->
-<?php if ($this->session->flashdata('success')): ?>
-    <div class="alert alert-success alert-dismissible fade show" role="alert">
-        <i class="fas fa-check-circle me-2"></i><?= $this->session->flashdata('success') ?>
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
-<?php endif; ?>
+        --rc-ink: #0e2a1f;
+        --rc-muted: #5f7c70;
+        --rc-line: #e2ede7;
+        --rc-bg: #f3f8f6;
+        --rc-white: #ffffff;
 
-<?php if ($this->session->flashdata('error')): ?>
-    <div class="alert alert-danger alert-dismissible fade show" role="alert">
-        <i class="fas fa-exclamation-circle me-2"></i><?= $this->session->flashdata('error') ?>
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
-<?php endif; ?>
+        --rc-radius-lg: 20px;
+        --rc-radius-md: 14px;
+        --rc-radius-sm: 10px;
+        --rc-shadow: 0 6px 24px rgba(11, 61, 41, 0.08);
+        --rc-shadow-hover: 0 12px 32px rgba(11, 61, 41, 0.14);
+    }
 
-<!-- Categories List -->
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="fas fa-table me-2"></i>All Categories</span>
-        <div class="d-flex gap-2">
-            <div class="input-group input-group-sm" style="width: 250px;">
-                <span class="input-group-text">
-                    <i class="fas fa-search"></i>
-                </span>
-                <input type="text" 
-                       id="searchInput" 
-                       class="form-control" 
-                       placeholder="Search by name..."
-                       autocomplete="off">
+    .rc-categories-container {
+        font-family: 'Inter', 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--rc-ink);
+        padding-bottom: 2rem;
+    }
+
+    .rc-categories-container h1,
+    .rc-categories-container h2,
+    .rc-categories-container h3,
+    .rc-categories-container h4,
+    .rc-categories-container h5,
+    .rc-categories-container h6 {
+        font-family: 'Poppins', 'Inter', sans-serif;
+        color: var(--rc-forest-900);
+    }
+
+    /* ---------- Breadcrumbs & Header ---------- */
+    .rc-page-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        background: var(--rc-white);
+        border: 1px solid var(--rc-line);
+        border-radius: var(--rc-radius-lg);
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: var(--rc-shadow);
+        flex-wrap: wrap;
+    }
+
+    .rc-page-header .rc-header-left {
+        display: flex;
+        align-items: center;
+        gap: .9rem;
+    }
+
+    .rc-header-badge {
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, var(--rc-forest-800), var(--rc-emerald-400));
+        color: #fff;
+        font-size: 1.15rem;
+        flex-shrink: 0;
+        box-shadow: 0 6px 14px rgba(15, 92, 62, 0.35);
+    }
+
+    .rc-page-header h1 {
+        font-size: 1.4rem;
+        font-weight: 700;
+        margin: 0;
+        line-height: 1.2;
+    }
+
+    .rc-page-header .rc-subtitle {
+        font-size: .85rem;
+        color: var(--rc-muted);
+        margin-top: 2px;
+    }
+
+    .rc-breadcrumb {
+        display: flex;
+        align-items: center;
+        gap: .4rem;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font-size: .8rem;
+        color: var(--rc-green-600);
+        background: rgba(46, 204, 113, 0.08);
+        padding: .4rem .9rem;
+        border-radius: 999px;
+        font-weight: 600;
+    }
+
+    .rc-breadcrumb a {
+        color: var(--rc-green-600);
+        text-decoration: none;
+        transition: color 0.15s ease;
+    }
+
+    .rc-breadcrumb a:hover {
+        color: var(--rc-forest-900);
+    }
+
+    /* ---------- Buttons ---------- */
+    .rc-btn-primary {
+        background: linear-gradient(135deg, var(--rc-green-600), var(--rc-green-500));
+        color: #fff;
+        border: none;
+        border-radius: var(--rc-radius-md);
+        padding: 0.75rem 1.5rem;
+        font-weight: 600;
+        font-size: 0.95rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        box-shadow: 0 4px 12px rgba(22, 121, 79, 0.2);
+        transition: all 0.2s ease;
+        cursor: pointer;
+    }
+
+    .rc-btn-primary:hover {
+        background: linear-gradient(135deg, var(--rc-forest-800), var(--rc-green-600));
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(22, 121, 79, 0.3);
+        color: #fff;
+    }
+
+    /* ---------- Cards ---------- */
+    .rc-card {
+        background: var(--rc-white);
+        border: 1px solid var(--rc-line);
+        border-radius: var(--rc-radius-lg);
+        box-shadow: var(--rc-shadow);
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .rc-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 1.75rem;
+        border-bottom: 1px solid var(--rc-line);
+        padding-bottom: 1.25rem;
+        flex-wrap: wrap;
+    }
+
+    .rc-card-title-group {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .rc-card-header h3 {
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin: 0;
+    }
+
+    .rc-card-header i.header-icon {
+        color: var(--rc-green-600);
+        font-size: 1.25rem;
+    }
+
+    /* ---------- Tables & Lists ---------- */
+    .table-responsive {
+        border-radius: var(--rc-radius-md);
+        border: 1px solid var(--rc-line);
+    }
+
+    .table thead th {
+        font-size: .75rem;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: var(--rc-muted);
+        font-weight: 700;
+        border-bottom: 1px solid var(--rc-line);
+        padding: 0.85rem 1rem;
+        background-color: var(--rc-bg-tint, #f9fbfb);
+    }
+
+    .table tbody td {
+        padding: 1rem;
+        border-bottom: 1px solid var(--rc-line);
+        color: var(--rc-ink);
+        font-size: 0.9rem;
+    }
+
+    .table tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    .table tbody tr {
+        transition: background .15s ease;
+    }
+
+    .table tbody tr:hover {
+        background: rgba(46, 204, 113, .04) !important;
+    }
+
+    /* Rounded images in table */
+    .table img.img-thumbnail {
+        border-radius: var(--rc-radius-sm);
+        border: 1px solid var(--rc-line);
+        padding: 0;
+        box-shadow: 0 2px 6px rgba(11, 61, 41, 0.05);
+    }
+
+    /* Status switch colors */
+    .form-check-input:checked {
+        background-color: var(--rc-green-500);
+        border-color: var(--rc-green-500);
+    }
+    
+    .form-switch .form-check-input {
+        cursor: pointer;
+    }
+
+    /* ---------- Table Action Buttons ---------- */
+    .rc-btn-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 9px;
+        border: 1px solid transparent;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: .8rem;
+        cursor: pointer;
+        transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+        text-decoration: none;
+        flex-shrink: 0;
+        box-shadow: 0 1px 2px rgba(11, 61, 41, .06);
+    }
+
+    .rc-btn-icon:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 14px -4px rgba(11, 61, 41, .35);
+    }
+
+    .rc-btn-icon.edit {
+        background: rgba(242, 169, 59, .15);
+        color: #a4680f;
+    }
+
+    .rc-btn-icon.edit:hover {
+        border-color: #a4680f;
+    }
+
+    .rc-btn-icon.delete {
+        background: rgba(220, 53, 69, .1);
+        color: #c0293a;
+    }
+
+    .rc-btn-icon.delete:hover {
+        border-color: #c0293a;
+    }
+
+    /* ---------- Search Box ---------- */
+    .rc-search-input {
+        border: 1px solid var(--rc-line);
+        border-radius: var(--rc-radius-md);
+        padding: 0.5rem 1rem;
+        font-size: 0.9rem;
+        color: var(--rc-ink);
+        background-color: var(--rc-bg-tint, #f9fbfb);
+        transition: all 0.2s ease;
+        outline: none;
+    }
+
+    .rc-search-input:focus {
+        border-color: var(--rc-green-500);
+        box-shadow: 0 0 0 4px rgba(31, 157, 99, 0.1);
+        background-color: #fff;
+    }
+
+    /* ---------- Pagination ---------- */
+    .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: .4rem;
+        list-style: none;
+        margin: 1.5rem 0 0;
+        padding: 0;
+        flex-wrap: wrap;
+    }
+
+    .pagination .page-link {
+        min-width: 36px;
+        height: 36px;
+        padding: 0 .75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        border: 1px solid var(--rc-line) !important;
+        background: var(--rc-white) !important;
+        color: var(--rc-ink) !important;
+        font-size: .82rem;
+        font-weight: 600;
+        text-decoration: none;
+        cursor: pointer;
+        transition: all .15s ease;
+    }
+
+    .pagination .page-link:hover {
+        border-color: var(--rc-green-500) !important;
+        color: var(--rc-green-600) !important;
+    }
+
+    .pagination .page-item.active .page-link {
+        background: linear-gradient(135deg, var(--rc-forest-800), var(--rc-green-500)) !important;
+        border-color: transparent !important;
+        color: #fff !important;
+        box-shadow: 0 6px 14px -4px rgba(15, 92, 62, .5);
+    }
+
+    .pagination .page-item.disabled .page-link {
+        opacity: .45;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
+</style>
+
+<div class="rc-categories-container">
+
+    <!-- Page Header -->
+    <div class="rc-page-header">
+        <div class="rc-header-left">
+            <div class="rc-header-badge"><i class="fas fa-list"></i></div>
+            <div>
+                <h1>Categories</h1>
+                <div class="rc-subtitle">Manage your product categories and hierarchy</div>
             </div>
-            <button type="button" id="clearSearch" class="btn btn-sm btn-secondary" style="display: none;">
-                <i class="fas fa-times"></i> Clear
-            </button>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+            <ul class="rc-breadcrumb d-none d-md-flex mb-0">
+                <li><a href="<?= base_url('dashboard') ?>"><i class="fas fa-home"></i> Dashboard</a></li>
+                <li>&nbsp;/&nbsp;Categories</li>
+            </ul>
+            <a href="<?= base_url('categories/add') ?>" class="rc-btn-primary text-decoration-none">
+                <i class="fas fa-plus"></i> Add Category
+            </a>
         </div>
     </div>
-    <div class="card-body">
+
+    <!-- Flash Messages -->
+    <?php if ($this->session->flashdata('success')): ?>
+        <div class="alert alert-success alert-dismissible fade show" role="alert" style="border-radius: var(--rc-radius-md);">
+            <i class="fas fa-check-circle me-2"></i><?= $this->session->flashdata('success') ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+
+    <?php if ($this->session->flashdata('error')): ?>
+        <div class="alert alert-danger alert-dismissible fade show" role="alert" style="border-radius: var(--rc-radius-md);">
+            <i class="fas fa-exclamation-circle me-2"></i><?= $this->session->flashdata('error') ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+
+    <!-- Categories List -->
+    <div class="rc-card">
+        <div class="rc-card-header">
+            <div class="rc-card-title-group">
+                <i class="fas fa-table header-icon"></i>
+                <h3>All Categories</h3>
+            </div>
+            
+            <div class="d-flex gap-2">
+                <div class="input-group input-group-sm" style="width: 250px;">
+                    <span class="input-group-text" style="background: var(--rc-bg-tint); border-color: var(--rc-line); border-radius: var(--rc-radius-md) 0 0 var(--rc-radius-md);">
+                        <i class="fas fa-search text-muted"></i>
+                    </span>
+                    <input type="text" 
+                           id="searchInput" 
+                           class="rc-search-input py-1" 
+                           placeholder="Search by name..."
+                           autocomplete="off"
+                           style="border-top-left-radius: 0; border-bottom-left-radius: 0; font-size: 0.85rem; width: auto; flex: 1;">
+                </div>
+                <button type="button" id="clearSearch" class="btn btn-sm btn-secondary" style="display: none; border-radius: var(--rc-radius-md);">
+                    <i class="fas fa-times"></i> Clear
+                </button>
+            </div>
+        </div>
+
         <!-- Loading Spinner -->
         <div id="loadingSpinner" class="text-center py-5" style="display: none;">
-            <div class="spinner-border text-primary" role="status">
+            <div class="spinner-border text-success" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
             <p class="text-muted mt-2">Loading categories...</p>
@@ -62,7 +414,7 @@
             <table class="table table-hover align-middle mb-0">
                 <thead>
                     <tr>
-                        <th width="80">ID</th>
+                        <th width="80">#</th>
                         <th width="100">Image</th>
                         <th>Name</th>
                         <th>Description</th>
@@ -72,7 +424,7 @@
                     </tr>
                 </thead>
                 <tbody id="categoriesTableBody">
-                    <!-- Data will be loaded via AJAX -->
+                    <!-- Data loaded via AJAX -->
                 </tbody>
             </table>
         </div>
@@ -81,8 +433,9 @@
         <div id="paginationContainer" class="mt-3"></div>
 
         <!-- Results Info -->
-        <div id="resultsInfo" class="text-center text-muted mt-2" style="font-size: 0.875rem;"></div>
+        <div id="resultsInfo" class="text-center text-muted mt-3" style="font-size: 0.85rem;"></div>
     </div>
+
 </div>
 
 <!-- Delete Form (Hidden) -->
@@ -90,39 +443,6 @@
     <input type="hidden" name="_method" value="DELETE">
 </form>
 
-<style>
-/* Custom styles */
-#categoriesTableContainer {
-    min-height: 400px;
-}
-
-.pagination .page-link {
-    cursor: pointer;
-}
-
-.page-item.active .page-link {
-    background-color: #0d6efd;
-    border-color: #0d6efd;
-}
-
-.page-item.disabled .page-link {
-    cursor: not-allowed;
-}
-
-/* Smooth transitions */
-#categoriesTableBody tr {
-    transition: background-color 0.2s;
-}
-
-#categoriesTableBody tr:hover {
-    background-color: rgba(0, 0, 0, 0.02);
-}
-
-.form-check-input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-</style>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script>
 $(document).ready(function() {
@@ -204,8 +524,8 @@ $(document).ready(function() {
                     
                     // Scroll to top smoothly
                     $('html, body').animate({
-                        scrollTop: $('#categoriesTableContainer').offset().top - 100
-                    }, 300);
+                        scrollTop: $('#categoriesTableContainer').offset().top - 120
+                    }, 200);
                 } else {
                     showError('Failed to load categories');
                 }
@@ -234,12 +554,12 @@ $(document).ready(function() {
             type: 'POST',
             data: { 
                 id: id, 
-                status: status            },
+                status: status
+            },
             dataType: 'json',
             success: function(response) {
                 if (response.status) {
-                    // Optional: Show success toast
-                    // showToast('Status updated successfully', 'success');
+                    // Status updated successfully
                 } else {
                     alert(response.message || 'Failed to update status');
                     toggle.prop('checked', !status);
@@ -270,7 +590,7 @@ $(document).ready(function() {
     // Helper functions
     function showLoading() {
         $('#loadingSpinner').show();
-        $('#categoriesTableContainer').css('opacity', '0.5');
+        $('#categoriesTableContainer').css('opacity', '0.4');
     }
 
     function hideLoading() {
@@ -284,8 +604,8 @@ $(document).ready(function() {
                 <td colspan="7" class="text-center py-5">
                     <i class="fas fa-exclamation-triangle fa-3x text-danger mb-3"></i>
                     <p class="text-danger">${message}</p>
-                    <button class="btn btn-primary" onclick="location.reload()">
-                        <i class="fas fa-sync me-2"></i>Reload Page
+                    <button class="rc-btn-primary" onclick="location.reload()">
+                        <i class="fas fa-sync"></i> Reload Page
                     </button>
                 </td>
             </tr>

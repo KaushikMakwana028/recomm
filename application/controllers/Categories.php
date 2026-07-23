@@ -1,7 +1,7 @@
 <?php
-defined('BASEPATH') OR exit('No direct script access allowed');
+defined('BASEPATH') or exit('No direct script access allowed');
 
-class Categories extends MY_Controller 
+class Categories extends MY_Controller
 {
     public function __construct()
     {
@@ -9,7 +9,7 @@ class Categories extends MY_Controller
     }
 
     // List all categories
-   public function index()
+    public function index()
     {
         $this->setPageTitle('Categories');
         $this->loadView('categories/index');
@@ -53,7 +53,7 @@ class Categories extends MY_Controller
         $pagination = $this->generate_pagination($page, $total_pages);
 
         // Generate HTML
-        $html = $this->generate_categories_html($categories);
+        $html = $this->generate_categories_html($categories, $offset);
 
         $response = [
             'status' => true,
@@ -68,7 +68,7 @@ class Categories extends MY_Controller
     }
 
     // Generate categories table HTML
-    private function generate_categories_html($categories)
+    private function generate_categories_html($categories, $offset = 0)
     {
         if (empty($categories)) {
             return '
@@ -85,7 +85,8 @@ class Categories extends MY_Controller
         }
 
         $html = '';
-        foreach ($categories as $category) {
+        foreach ($categories as $index => $category) {
+            $serial = $offset + $index + 1;
             $image_html = '';
             if (!empty($category->image)) {
                 $image_html = '
@@ -104,8 +105,8 @@ class Categories extends MY_Controller
 
             $description = '-';
             if (!empty($category->description)) {
-                $desc = strlen($category->description) > 50 
-                    ? substr($category->description, 0, 50) . '...' 
+                $desc = strlen($category->description) > 50
+                    ? substr($category->description, 0, 50) . '...'
                     : $category->description;
                 $description = ($desc);
             }
@@ -114,7 +115,7 @@ class Categories extends MY_Controller
 
             $html .= '
                 <tr>
-                    <td><strong>#' . ($category->id) . '</strong></td>
+                    <td><strong>' . $serial . '</strong></td>
                     <td>' . $image_html . '</td>
                     <td>
                         <strong>' . ($category->name) . '</strong>
@@ -135,20 +136,22 @@ class Categories extends MY_Controller
                         <small>' . date('d M Y', strtotime($category->created_on)) . '</small>
                     </td>
                     <td class="text-center">
-                        <a href="' . base_url('categories/edit/' . ($category->id)) . '" 
-                           class="btn btn-sm btn-info" 
-                           title="Edit"
-                           aria-label="Edit ' . ($category->name) . '">
-                            <i class="fas fa-edit"></i>
-                        </a>
-                        <button type="button"
-                                class="btn btn-sm btn-danger btn-delete" 
-                                data-id="' . ($category->id) . '"
-                                data-name="' . ($category->name) . '"
-                                title="Delete"
-                                aria-label="Delete ' . ($category->name) . '">
-                            <i class="fas fa-trash"></i>
-                        </button>
+                        <div class="d-flex align-items-center justify-content-center gap-2">
+                            <a href="' . base_url('categories/edit/' . ($category->id)) . '" 
+                               class="rc-btn-icon edit" 
+                               title="Edit"
+                               aria-label="Edit ' . ($category->name) . '">
+                                <i class="fas fa-edit"></i>
+                            </a>
+                            <button type="button"
+                                    class="rc-btn-icon delete btn-delete" 
+                                    data-id="' . ($category->id) . '"
+                                    data-name="' . ($category->name) . '"
+                                    title="Delete"
+                                    aria-label="Delete ' . ($category->name) . '">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
                     </td>
                 </tr>
             ';
@@ -181,7 +184,7 @@ class Categories extends MY_Controller
         // Calculate range for 3 buttons
         $start_page = max(1, $current_page - 1);
         $end_page = min($total_pages, $start_page + 2);
-        
+
         // Adjust start if we're near the end
         if ($end_page - $start_page < 2) {
             $start_page = max(1, $end_page - 2);
@@ -235,31 +238,31 @@ class Categories extends MY_Controller
     {
         if ($this->input->method() == 'post') {
             $this->form_validation->set_rules('name', 'Category Name', 'required|trim');
-            
+
             if ($this->form_validation->run()) {
                 $slug = $this->generateSlug($this->post('name'));
-                
+
                 // Check if slug exists
                 if ($this->gm->exists('categories', ['slug' => $slug])) {
                     $slug = $slug . '-' . time();
                 }
-                
+
                 // Handle image upload
                 $image = '';
                 if (!empty($_FILES['image']['name'])) {
                     $upload_path = './assets/uploads/categories/';
-                    
+
                     if (!is_dir($upload_path)) {
                         mkdir($upload_path, 0777, true);
                     }
-                    
+
                     $config['upload_path'] = $upload_path;
                     $config['allowed_types'] = 'jpg|jpeg|png|gif';
                     $config['max_size'] = 2048;
                     $config['encrypt_name'] = TRUE;
-                    
+
                     $this->upload->initialize($config);
-                    
+
                     if ($this->upload->do_upload('image')) {
                         $upload_data = $this->upload->data();
                         $image = 'assets/uploads/categories/' . $upload_data['file_name'];
@@ -269,7 +272,7 @@ class Categories extends MY_Controller
                         return;
                     }
                 }
-                
+
                 $data = [
                     'name' => $this->post('name'),
                     'slug' => $slug,
@@ -278,7 +281,7 @@ class Categories extends MY_Controller
                     'is_active' => $this->post('is_active') ? 1 : 0,
                     'created_on' => date('Y-m-d H:i:s')
                 ];
-                
+
                 if ($this->gm->insert('categories', $data)) {
                     $this->setMessage('success', 'Category added successfully');
                     redirect('categories');
@@ -287,7 +290,7 @@ class Categories extends MY_Controller
                 }
             }
         }
-        
+
         $this->setPageTitle('Add Category');
         $this->loadView('categories/add');
     }
@@ -296,44 +299,44 @@ class Categories extends MY_Controller
     public function edit($id)
     {
         $data['category'] = $this->gm->getById('categories', $id);
-        
+
         if (!$data['category']) {
             $this->setMessage('danger', 'Category not found');
             redirect('categories');
         }
-        
+
         if ($this->input->method() == 'post') {
             $this->form_validation->set_rules('name', 'Category Name', 'required|trim');
-            
+
             if ($this->form_validation->run()) {
                 $update_data = [
                     'name' => $this->post('name'),
                     'description' => $this->post('description'),
                     'is_active' => $this->post('is_active') ? 1 : 0
                 ];
-                
+
                 // Handle image upload
                 if (!empty($_FILES['image']['name'])) {
                     $upload_path = './assets/uploads/categories/';
-                    
+
                     $config['upload_path'] = $upload_path;
                     $config['allowed_types'] = 'jpg|jpeg|png|gif';
                     $config['max_size'] = 2048;
                     $config['encrypt_name'] = TRUE;
-                    
+
                     $this->upload->initialize($config);
-                    
+
                     if ($this->upload->do_upload('image')) {
                         // Delete old image
                         if ($data['category']->image && file_exists($data['category']->image)) {
                             unlink($data['category']->image);
                         }
-                        
+
                         $upload_data = $this->upload->data();
                         $update_data['image'] = 'assets/uploads/categories/' . $upload_data['file_name'];
                     }
                 }
-                
+
                 if ($this->gm->update('categories', $update_data, ['id' => $id])) {
                     $this->setMessage('success', 'Category updated successfully');
                     redirect('categories');
@@ -342,7 +345,7 @@ class Categories extends MY_Controller
                 }
             }
         }
-        
+
         $this->setPageTitle('Edit Category');
         $this->loadView('categories/edit', $data);
     }
@@ -351,13 +354,13 @@ class Categories extends MY_Controller
     public function delete($id)
     {
         $category = $this->gm->getById('categories', $id);
-        
+
         if ($category) {
             // Delete image file
             if ($category->image && file_exists($category->image)) {
                 unlink($category->image);
             }
-            
+
             if ($this->gm->delete('categories', ['id' => $id])) {
                 $this->setMessage('success', 'Category deleted successfully');
             } else {
@@ -366,7 +369,7 @@ class Categories extends MY_Controller
         } else {
             $this->setMessage('danger', 'Category not found');
         }
-        
+
         redirect('categories');
     }
 
@@ -376,7 +379,7 @@ class Categories extends MY_Controller
         if ($this->isAjax()) {
             $id = $this->post('id');
             $status = $this->post('status');
-            
+
             if ($this->gm->update('categories', ['is_active' => $status], ['id' => $id])) {
                 $this->jsonResponse(true, 'Status updated successfully');
             } else {

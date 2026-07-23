@@ -93,9 +93,7 @@ $route['orders/view/(:num)'] = 'orders/view/$1';
 $route['orders/update-status'] = 'orders/update_status';
 
 // Settings
-$route['settings'] = 'settings/index';
-$route['settings/profile'] = 'settings/profile';
-$route['settings/change-password'] = 'settings/change_password';
+$route['settings/profile'] = 'profile/index';
 $route['users/login-as-vendor/(:num)'] = 'users/login_as_vendor/$1';
 
 
