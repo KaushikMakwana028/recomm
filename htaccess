@@ -1,0 +1,14 @@
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /
+
+# Existing files/folders
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# API requests go to CodeIgniter
+RewriteRule ^api/(.*)$ index.php/api/$1 [L]
+
+# React Routes
+RewriteRule . /index.html [L]
+</IfModule>

@@ -1,0 +1,21 @@
+/* Additional custom styles */
+.table-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.table-actions .btn {
+    padding: 5px 10px;
+    font-size: 13px;
+}
+
+.status-toggle {
+    cursor: pointer;
+}
+
+.preview-image {
+    max-width: 100px;
+    max-height: 100px;
+    object-fit: cover;
+    border-radius: 10px;
+}
