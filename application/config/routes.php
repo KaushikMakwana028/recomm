@@ -118,5 +118,49 @@ $route['api/add_offer'] = 'api/add_offer';
 $route['api/edit_offer/(:num)'] = 'api/edit_offer/$1';
 $route['api/delete_offer/(:num)'] = 'api/delete_offer/$1';
 
+// User API Routes
+$route['api/user/register_send_otp'] = 'user/api/register_send_otp';
+$route['api/user/verify_register_otp'] = 'user/api/verify_register_otp';
+$route['api/user/login_send_otp'] = 'user/api/login_send_otp';
+$route['api/user/verify_login_otp'] = 'user/api/verify_login_otp';
+$route['api/user/google_login'] = 'user/api/google_login';
+$route['api/user/guest_login'] = 'user/api/guest_login';
+$route['api/user/home'] = 'user/api/home';
+$route['api/user/get_category_list'] = 'user/api/get_category_list';
+$route['api/user/get_category_detail'] = 'user/api/get_category_detail';
+$route['api/user/get_category_detail/(:num)'] = 'user/api/get_category_detail/$1';
+$route['api/user/get_products_by_category'] = 'user/api/get_products_by_category';
+$route['api/user/get_products_by_category/(:num)'] = 'user/api/get_products_by_category/$1';
+$route['api/user/get_product_list'] = 'user/api/get_product_list';
+$route['api/user/get_product_detail'] = 'user/api/get_product_detail';
+$route['api/user/get_product_detail/(:num)'] = 'user/api/get_product_detail/$1';
+$route['api/user/get_profile'] = 'user/api/get_profile';
+$route['api/user/update_profile'] = 'user/api/update_profile';
+
+// Cart API Routes
+$route['api/user/get_cart_row'] = 'user/api/get_cart_row';
+$route['api/user/get_cart_row/(:num)'] = 'user/api/get_cart_row/$1';
+$route['api/user/get_cart_summary'] = 'user/api/get_cart_summary';
+$route['api/user/add_to_cart'] = 'user/api/add_to_cart';
+$route['api/user/get_cart'] = 'user/api/get_cart';
+$route['api/user/update_cart_quantity'] = 'user/api/update_cart_quantity';
+$route['api/user/remove_from_cart'] = 'user/api/remove_from_cart';
+$route['api/user/clear_cart'] = 'user/api/clear_cart';
+
+// Wishlist API Routes
+$route['api/user/add_to_wishlist'] = 'user/api/add_to_wishlist';
+$route['api/user/clear_wishlist'] = 'user/api/clear_wishlist';
+$route['api/user/get_wishlist_summary'] = 'user/api/get_wishlist_summary';
+$route['api/user/get_wishlist'] = 'user/api/get_wishlist';
+$route['api/user/update_wishlist_quantity'] = 'user/api/update_wishlist_quantity';
+$route['api/user/remove_from_wishlist'] = 'user/api/remove_from_wishlist';
+$route['api/user/add_all_to_cart'] = 'user/api/add_all_to_cart';
+
+$route['api/user/test_token'] = 'user/api/test_token';
+$route['api/user/logout'] = 'user/api/logout';
+
+
+
+
 
 
