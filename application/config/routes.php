@@ -117,6 +117,8 @@ $route['api/get_offers'] = 'api/get_offers';
 $route['api/add_offer'] = 'api/add_offer';
 $route['api/edit_offer/(:num)'] = 'api/edit_offer/$1';
 $route['api/delete_offer/(:num)'] = 'api/delete_offer/$1';
+$route['api/get_vendor_orders'] = 'api/get_vendor_orders';
+$route['api/update_vendor_order_status'] = 'api/update_vendor_order_status';
 
 // User API Routes
 $route['api/user/register_send_otp'] = 'user/api/register_send_otp';
@@ -136,6 +138,8 @@ $route['api/user/get_product_detail'] = 'user/api/get_product_detail';
 $route['api/user/get_product_detail/(:num)'] = 'user/api/get_product_detail/$1';
 $route['api/user/get_profile'] = 'user/api/get_profile';
 $route['api/user/update_profile'] = 'user/api/update_profile';
+$route['api/user/search_products'] = 'user/api/search_products';
+$route['api/user/search_categories'] = 'user/api/search_categories';
 
 // Cart API Routes
 $route['api/user/get_cart_row'] = 'user/api/get_cart_row';
@@ -155,6 +159,24 @@ $route['api/user/get_wishlist'] = 'user/api/get_wishlist';
 $route['api/user/update_wishlist_quantity'] = 'user/api/update_wishlist_quantity';
 $route['api/user/remove_from_wishlist'] = 'user/api/remove_from_wishlist';
 $route['api/user/add_all_to_cart'] = 'user/api/add_all_to_cart';
+
+// Address API Routes
+$route['api/user/get_addresses'] = 'user/api/get_addresses';
+$route['api/user/save_address'] = 'user/api/save_address';
+$route['api/user/update_address'] = 'user/api/update_address';
+$route['api/user/delete_address'] = 'user/api/delete_address';
+
+// Order API Routes
+$route['api/user/place_order'] = 'user/api/place_order';
+$route['api/user/verify_order_payment'] = 'user/api/verify_order_payment';
+$route['api/user/get_orders'] = 'user/api/get_orders';
+$route['api/user/get_order_details'] = 'user/api/get_order_details';
+$route['api/user/get_order_details/(:num)'] = 'user/api/get_order_details/$1';
+$route['api/user/cancel_order'] = 'user/api/cancel_order';
+
+// Vendor Orders API Routes
+$route['api/user/get_vendor_orders'] = 'user/api/get_vendor_orders';
+$route['api/user/update_vendor_order_status'] = 'user/api/update_vendor_order_status';
 
 $route['api/user/test_token'] = 'user/api/test_token';
 $route['api/user/logout'] = 'user/api/logout';
