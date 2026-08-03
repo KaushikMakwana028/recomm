@@ -193,7 +193,7 @@ class Users extends MY_Controller
             if ($user->role == 'vendor') {
 
                 $actions .= '
-            <a href="' . base_url('users/store/' . $user->id) . '" class="rc-btn-icon store">
+            <a href="' . base_url('users/login-as-vendor/' . $user->id) . '" class="rc-btn-icon store">
                 <i class="fas fa-store"></i>
             </a>';
             }

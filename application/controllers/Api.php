@@ -484,7 +484,7 @@ class Api extends CI_Controller
         }
 
         $user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on')
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
             ->where('id', $id)
             ->get('users')
             ->row();
@@ -529,7 +529,13 @@ class Api extends CI_Controller
                 'store_photo' => !empty($user->store_photo) ? base_url($user->store_photo) : null,
                 'role' => $user->role,
                 'is_active' => (int)$user->is_active,
-                'created_at' => $user->created_on
+                'created_at' => $user->created_on,
+                'account_holder_name' => $user->account_holder_name,
+                'bank_name' => $user->bank_name,
+                'account_number' => $user->account_number,
+                'ifsc_code' => $user->ifsc_code,
+                'account_type' => $user->account_type,
+                'branch_name' => $user->branch_name
             ]
         ]));
     }
@@ -600,8 +606,8 @@ class Api extends CI_Controller
             $update_data['email'] = $email;
         }
 
-        if ($this->input->post('store_name')) {
-            $update_data['store_name'] = trim($this->input->post('store_name'));
+        if ($this->input->post('shop_name')) {
+            $update_data['store_name'] = trim($this->input->post('shop_name'));
         }
 
         if ($this->input->post('owner_name')) {
@@ -630,6 +636,43 @@ class Api extends CI_Controller
         if ($this->input->post('is_holiday') !== null) {
             $val = $this->input->post('is_holiday');
             $update_data['is_holiday'] = in_array(strtolower((string)$val), ['1', 'true', 'yes', 'on'], true) ? 1 : 0;
+        }
+
+        // Bank detail fields
+        if ($this->input->post('account_holder_name')) {
+            $update_data['account_holder_name'] = trim($this->input->post('account_holder_name'));
+        }
+
+        if ($this->input->post('bank_name')) {
+            $update_data['bank_name'] = trim($this->input->post('bank_name'));
+        }
+
+        if ($this->input->post('account_number')) {
+            $update_data['account_number'] = trim($this->input->post('account_number'));
+        }
+
+        if ($this->input->post('ifsc_code')) {
+            $update_data['ifsc_code'] = strtoupper(trim($this->input->post('ifsc_code')));
+        }
+
+        if ($this->input->post('account_type')) {
+            $account_type = trim($this->input->post('account_type'));
+            $allowed_account_types = ['current', 'savings', 'business', 'cash_credit', 'overdraft', 'joint'];
+            if (!in_array($account_type, $allowed_account_types, true)) {
+                return $this->output
+                    ->set_status_header(422)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 422,
+                        'message' => 'Invalid account type',
+                        'data' => null
+                    ]));
+            }
+            $update_data['account_type'] = $account_type;
+        }
+
+        if ($this->input->post('branch_name')) {
+            $update_data['branch_name'] = trim($this->input->post('branch_name'));
         }
 
         // Handle profile image upload
@@ -719,7 +762,8 @@ class Api extends CI_Controller
 
         // Get updated user
         $updated_user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on')->where('id', $user_id)
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
+            ->where('id', $user_id)
             ->get('users')
             ->row();
 
@@ -747,10 +791,17 @@ class Api extends CI_Controller
                     'store_photo' => $updated_user->store_photo ? base_url($updated_user->store_photo) : null,
                     'role' => $updated_user->role,
                     'is_active' => (int)$updated_user->is_active,
-                    'created_at' => $updated_user->created_on
+                    'created_at' => $updated_user->created_on,
+                    'account_holder_name' => $updated_user->account_holder_name,
+                    'bank_name' => $updated_user->bank_name,
+                    'account_number' => $updated_user->account_number,
+                    'ifsc_code' => $updated_user->ifsc_code,
+                    'account_type' => $updated_user->account_type,
+                    'branch_name' => $updated_user->branch_name
                 ]
             ]));
     }
+
     public function categories()
     {
         $this->ensureMethod('GET');
@@ -2731,6 +2782,95 @@ class Api extends CI_Controller
             'changed_by' => $changed_by,
             'created_at' => date('Y-m-d H:i:s'),
         ]);
+    }
+
+    public function get_vendor_stats()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        // Skip auth check if admin session is active
+        $admin_logged_in = $this->session->userdata('admin_logged_in');
+        if ($admin_logged_in !== TRUE && $admin_logged_in !== 1 && $admin_logged_in !== '1') {
+            // Require JWT for API requests if not logged in as admin session
+            $authHeader = $this->input->get_request_header('Authorization', TRUE);
+            $token = null;
+            if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+                $token = $matches[1];
+            }
+            $decoded = $this->verify_jwt($token);
+            if (!$decoded || empty($decoded->data->id)) {
+                return $this->output
+                    ->set_status_header(401)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 401,
+                        'message' => 'Unauthorized',
+                        'data' => null
+                    ]));
+            }
+        }
+
+        // Fetch stats
+        $vendors = $this->db
+            ->select('id, name, store_name')
+            ->where('role', 'vendor')
+            ->get('users')
+            ->result_array();
+
+        $stats = [];
+        foreach ($vendors as $v) {
+            // Calculate revenue
+            $revenue = $this->db
+                ->select('SUM(oi.subtotal + oi.gst_amount) as total')
+                ->from('order_items oi')
+                ->join('orders o', 'o.id = oi.order_id')
+                ->where('oi.vendor_id', $v['id'])
+                ->where('o.status !=', 'cancelled')
+                ->get()
+                ->row()
+                ->total ?: 0.00;
+
+            // Calculate sold products
+            $products_sold = $this->db
+                ->select_sum('quantity')
+                ->from('order_items oi')
+                ->join('orders o', 'o.id = oi.order_id')
+                ->where('oi.vendor_id', $v['id'])
+                ->where('o.status !=', 'cancelled')
+                ->get()
+                ->row()
+                ->quantity ?: 0;
+
+            // Calculate orders count
+            $orders_count = $this->db
+                ->select('COUNT(DISTINCT oi.order_id) as count')
+                ->from('order_items oi')
+                ->join('orders o', 'o.id = oi.order_id')
+                ->where('oi.vendor_id', $v['id'])
+                ->where('o.status !=', 'cancelled')
+                ->get()
+                ->row()
+                ->count ?: 0;
+
+            $stats[] = [
+                'vendor_id' => (int)$v['id'],
+                'name' => $v['name'] ?: $v['store_name'] ?: 'Vendor #' . $v['id'],
+                'store_name' => $v['store_name'] ?: $v['name'],
+                'revenue' => (float)$revenue,
+                'products_sold' => (int)$products_sold,
+                'orders_count' => (int)$orders_count
+            ];
+        }
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Vendor statistics retrieved successfully',
+                'data' => $stats
+            ]));
     }
 
     private function restore_stock_for_order(int $order_id, int $vendor_id): void

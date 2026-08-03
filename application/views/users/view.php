@@ -329,31 +329,69 @@
     /* ---------- Info grid (replaces wide bootstrap tables) ---------- */
     .rc-info-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-        gap: 1rem 1.5rem;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.85rem;
     }
 
     .rc-info-field {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.85rem 1rem;
+        background: #f8faf8;
+        border: 1px solid var(--rc-line);
+        border-radius: var(--rc-radius-md);
+        transition: all 0.2s ease;
         min-width: 0;
+    }
+
+    .rc-info-field:hover {
+        background: #fff;
+        border-color: var(--rc-green-500);
+        box-shadow: 0 4px 12px rgba(11, 61, 41, 0.04);
+        transform: translateY(-1px);
     }
 
     .rc-info-field--full {
         grid-column: 1 / -1;
     }
 
+    .rc-info-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: rgba(31, 157, 99, 0.08);
+        color: var(--rc-green-600);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.95rem;
+        flex-shrink: 0;
+        transition: all 0.2s ease;
+    }
+
+    .rc-info-field:hover .rc-info-icon {
+        background: var(--rc-green-600);
+        color: #fff;
+    }
+
+    .rc-info-content {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+
     .rc-info-label {
-        display: block;
-        font-size: .72rem;
+        font-size: .68rem;
         text-transform: uppercase;
         letter-spacing: .04em;
         color: var(--rc-muted);
         font-weight: 700;
-        margin-bottom: .2rem;
+        margin-bottom: .15rem;
     }
 
     .rc-info-value {
-        display: block;
-        font-size: .93rem;
+        font-size: .88rem;
         font-weight: 600;
         color: var(--rc-forest-900);
         word-break: break-word;
@@ -712,20 +750,32 @@
                     </div>
                     <div class="rc-info-grid">
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Full Name</span>
-                            <span class="rc-info-value"><?= $user->name ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-user"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Full Name</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->name ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Mobile</span>
-                            <span class="rc-info-value"><?= $user->mobile ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-phone"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Mobile</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->mobile ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Email</span>
-                            <span class="rc-info-value"><?= $user->email ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-envelope"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Email</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->email ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Joined On</span>
-                            <span class="rc-info-value"><?= date('d M Y, h:i A', strtotime($user->created_on)) ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-calendar-alt"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Joined On</span>
+                                <span class="rc-info-value"><?= date('d M Y, h:i A', strtotime($user->created_on)) ?></span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -740,24 +790,39 @@
                     </div>
                     <div class="rc-info-grid">
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Full Name</span>
-                            <span class="rc-info-value"><?= $user->name ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-user"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Full Name</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->name ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Mobile</span>
-                            <span class="rc-info-value"><?= $user->mobile ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-phone"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Mobile</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->mobile ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Email</span>
-                            <span class="rc-info-value"><?= $user->email ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-envelope"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Email</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->email ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field rc-info-field--full">
-                            <span class="rc-info-label">Address</span>
-                            <span class="rc-info-value"><?= $user->address ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-map-marker-alt"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Address</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->address ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Joined On</span>
-                            <span class="rc-info-value"><?= date('d M Y, h:i A', strtotime($user->created_on)) ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-calendar-alt"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Joined On</span>
+                                <span class="rc-info-value"><?= date('d M Y, h:i A', strtotime($user->created_on)) ?></span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -779,44 +844,126 @@
 
                     <div class="rc-info-grid">
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Store Name</span>
-                            <span class="rc-info-value"><?= $user->store_name ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-store"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Store Name</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->store_name ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Owner Name</span>
-                            <span class="rc-info-value"><?= $user->owner_name ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-user-tie"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Owner Name</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->owner_name ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Mobile</span>
-                            <span class="rc-info-value"><?= $user->mobile ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-phone"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Mobile</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->mobile ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Contact Number</span>
-                            <span class="rc-info-value"><?= $user->contact_number ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-phone-alt"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Contact Number</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->contact_number ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Email</span>
-                            <span class="rc-info-value"><?= $user->email ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-envelope"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Email</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->email ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">GST Number</span>
-                            <span class="rc-info-value"><?= $user->gst_number ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-file-invoice-dollar"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">GST Number</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->gst_number ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field rc-info-field--full">
-                            <span class="rc-info-label">Address</span>
-                            <span class="rc-info-value"><?= $user->address ?: '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-map-marker-alt"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Address</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->address ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Opening Time</span>
-                            <span class="rc-info-value"><?= $user->opening_time ? date('h:i A', strtotime($user->opening_time)) : '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-clock"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Opening Time</span>
+                                <span class="rc-info-value"><?= $user->opening_time ? date('h:i A', strtotime($user->opening_time)) : '-' ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Closing Time</span>
-                            <span class="rc-info-value"><?= $user->closing_time ? date('h:i A', strtotime($user->closing_time)) : '-' ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-clock"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Closing Time</span>
+                                <span class="rc-info-value"><?= $user->closing_time ? date('h:i A', strtotime($user->closing_time)) : '-' ?></span>
+                            </div>
                         </div>
                         <div class="rc-info-field">
-                            <span class="rc-info-label">Joined On</span>
-                            <span class="rc-info-value"><?= date('d M Y, h:i A', strtotime($user->created_on)) ?></span>
+                            <div class="rc-info-icon"><i class="fas fa-calendar-alt"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Joined On</span>
+                                <span class="rc-info-value"><?= date('d M Y, h:i A', strtotime($user->created_on)) ?></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VENDOR Bank Details -->
+                <div class="rc-card rc-bank-card" style="margin-top: 1.25rem;">
+                    <div class="rc-card-header">
+                        <i class="fas fa-university"></i>
+                        <h3>Bank Information</h3>
+                    </div>
+                    <div class="rc-info-grid">
+                        <div class="rc-info-field">
+                            <div class="rc-info-icon"><i class="fas fa-user"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Account Holder</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->account_holder_name ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
+                        </div>
+                        <div class="rc-info-field">
+                            <div class="rc-info-icon"><i class="fas fa-university"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Bank Name</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->bank_name ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
+                        </div>
+                        <div class="rc-info-field">
+                            <div class="rc-info-icon"><i class="fas fa-hashtag"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Account Number</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->account_number ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
+                        </div>
+                        <div class="rc-info-field">
+                            <div class="rc-info-icon"><i class="fas fa-code"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">IFSC Code</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->ifsc_code ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
+                        </div>
+                        <div class="rc-info-field">
+                            <div class="rc-info-icon"><i class="fas fa-piggy-bank"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Account Type</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->account_type ? ucfirst($user->account_type) : '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
+                        </div>
+                        <div class="rc-info-field">
+                            <div class="rc-info-icon"><i class="fas fa-map-signs"></i></div>
+                            <div class="rc-info-content">
+                                <span class="rc-info-label">Branch Name</span>
+                                <span class="rc-info-value"><?= htmlspecialchars($user->branch_name ?: '-', ENT_QUOTES, 'UTF-8') ?></span>
+                            </div>
                         </div>
                     </div>
                 </div>

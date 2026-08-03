@@ -1,5 +1,5 @@
 <?php
-defined('BASEPATH') OR exit('No direct script access allowed');
+defined('BASEPATH') or exit('No direct script access allowed');
 
 /*
 | -------------------------------------------------------------------------
@@ -103,14 +103,14 @@ $route['users/login-as-vendor/(:num)'] = 'users/login_as_vendor/$1';
 // vendor api
 $route['api/login_send_otp'] = 'api/login_send_otp';
 $route['api/verify_login_otp'] = 'api/verify_login_otp';
-$route['api/get_profile/(:num)'] = 'api/get_profile/$1'; 
+$route['api/get_profile/(:num)'] = 'api/get_profile/$1';
 $route['api/update_profile'] = 'api/update_profile';
-$route['api/categories'] = 'api/categories'; 
+$route['api/categories'] = 'api/categories';
 $route['api/get_products'] = 'api/get_products';
 $route['api/product_details/(:num)'] = 'api/product_details/$1';
 $route['api/add_vendor_product'] = 'api/add_vendor_product';
-$route['api/edit_vendor_product/(:num)'] = 'api/edit_vendor_product/$1';  
-$route['api/delete_vendor_product/(:num)'] = 'api/delete_vendor_product/$1';  
+$route['api/edit_vendor_product/(:num)'] = 'api/edit_vendor_product/$1';
+$route['api/delete_vendor_product/(:num)'] = 'api/delete_vendor_product/$1';
 $route['api/get_inventory'] = 'api/get_inventory';
 $route['api/update_stock'] = 'api/update_stock';
 $route['api/get_offers'] = 'api/get_offers';
@@ -119,6 +119,7 @@ $route['api/edit_offer/(:num)'] = 'api/edit_offer/$1';
 $route['api/delete_offer/(:num)'] = 'api/delete_offer/$1';
 $route['api/get_vendor_orders'] = 'api/get_vendor_orders';
 $route['api/update_vendor_order_status'] = 'api/update_vendor_order_status';
+$route['api/get_vendor_stats'] = 'api/get_vendor_stats';
 
 // User API Routes
 $route['api/user/register_send_otp'] = 'user/api/register_send_otp';
@@ -180,9 +181,3 @@ $route['api/user/update_vendor_order_status'] = 'user/api/update_vendor_order_st
 
 $route['api/user/test_token'] = 'user/api/test_token';
 $route['api/user/logout'] = 'user/api/logout';
-
-
-
-
-
-

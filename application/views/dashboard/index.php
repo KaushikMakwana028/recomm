@@ -500,6 +500,80 @@
             display: none;
         }
     }
+
+    /* Searchable Dropdown Style */
+    .rc-vendor-select-container {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .rc-control-label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #5f7c70;
+    }
+    .rc-searchable-dropdown {
+        position: relative;
+        width: 250px;
+    }
+    .rc-searchable-dropdown input {
+        width: 100%;
+        padding: 0.5rem 2.2rem 0.5rem 0.75rem;
+        font-size: 0.85rem;
+        border: 1px solid var(--rc-line);
+        border-radius: var(--rc-radius-sm);
+        outline: none;
+        background: #fff url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%235f7c70' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") no-repeat right 0.75rem center/10px 10px;
+    }
+    .rc-dropdown-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        z-index: 1000;
+        display: none;
+        max-height: 200px;
+        overflow-y: auto;
+        background: #fff;
+        border: 1px solid var(--rc-line);
+        border-radius: var(--rc-radius-sm);
+        box-shadow: 0 4px 12px rgba(15, 92, 62, 0.1);
+        margin-top: 2px;
+    }
+    .rc-dropdown-menu.show {
+        display: block;
+    }
+    .rc-dropdown-item {
+        padding: 0.6rem 0.75rem;
+        font-size: 0.85rem;
+        color: var(--rc-ink);
+        cursor: pointer;
+        transition: background 0.15s ease;
+    }
+    .rc-dropdown-item:hover, .rc-dropdown-item.active {
+        background: #f0faf4;
+        color: var(--rc-green-600);
+        font-weight: 600;
+    }
+    .rc-toggle-label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--rc-ink);
+        cursor: pointer;
+        user-select: none;
+    }
+    .rc-checkbox-custom {
+        width: 1.1rem;
+        height: 1.1rem;
+        border-radius: 4px;
+        border: 2px solid var(--rc-green-500);
+        cursor: pointer;
+    }
+    .rc-checkbox-custom:checked {
+        background-color: var(--rc-green-500);
+        border-color: var(--rc-green-500);
+    }
 </style>
 
 <div class="rc-dash">
@@ -582,7 +656,7 @@
         <div class="col-6 col-xl-3">
             <div class="rc-stat-card tint-success">
                 <div class="rc-icon"><i class="fas fa-check-circle"></i></div>
-                <h3><?= number_format($this->gm->countRows('orders', ['status' => 'completed'])) ?></h3>
+                <h3><?= number_format($this->gm->countRows('orders', ['status' => 'delivered']) + $this->gm->countRows('orders', ['status' => 'completed'])) ?></h3>
                 <p>Completed Orders</p>
             </div>
         </div>
@@ -611,6 +685,44 @@
                 <div class="rc-card-body">
                     <div style="position:relative;height:280px;">
                         <canvas id="statusChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Vendor Statistics Chart -->
+    <div class="row g-3 g-md-4 mt-1">
+        <div class="col-12">
+            <div class="rc-card">
+                <div class="rc-card-header">
+                    <span><i class="fas fa-store me-2"></i>Vendor Performance Analysis (Revenue, Sold Products & Orders)</span>
+                </div>
+                <div class="rc-card-body">
+                    <!-- Vendor Chart Controls -->
+                    <div class="rc-chart-controls mb-3 d-flex flex-wrap align-items-center justify-content-between gap-3">
+                        <!-- Searchable Vendor Dropdown -->
+                        <div class="rc-vendor-select-container">
+                            <span class="rc-control-label"><i class="fas fa-filter me-1"></i>Filter Vendor:</span>
+                            <div class="rc-searchable-dropdown" id="vendor-searchable-dropdown">
+                                <input type="text" id="vendor-search-input" placeholder="Type to search vendor..." autocomplete="off">
+                                <div class="rc-dropdown-menu" id="vendor-dropdown-menu">
+                                    <div class="rc-dropdown-item active" data-value="all">All Vendors</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Filters -->
+                        <div class="d-flex align-items-center gap-3">
+                            <label class="rc-toggle-label d-flex align-items-center gap-2 m-0">
+                                <input type="checkbox" id="high-performers-toggle" class="form-check-input rc-checkbox-custom m-0">
+                                <span>Show Top Performers in Sequence</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="position:relative;height:320px;">
+                        <canvas id="vendorChart"></canvas>
                     </div>
                 </div>
             </div>
@@ -803,15 +915,17 @@
         new Chart(statusCtx, {
             type: 'doughnut',
             data: {
-                labels: ['Pending', 'Processing', 'Completed', 'Cancelled'],
+                labels: ['Pending', 'Confirmed', 'Packed', 'Out for Delivery', 'Delivered', 'Cancelled'],
                 datasets: [{
                     data: [
                         <?= $this->gm->countRows('orders', ['status' => 'pending']) ?>,
-                        <?= $this->gm->countRows('orders', ['status' => 'processing']) ?>,
-                        <?= $this->gm->countRows('orders', ['status' => 'completed']) ?>,
+                        <?= $this->gm->countRows('orders', ['status' => 'confirmed']) ?>,
+                        <?= $this->gm->countRows('orders', ['status' => 'packed']) ?>,
+                        <?= $this->gm->countRows('orders', ['status' => 'out_for_delivery']) ?>,
+                        <?= $this->gm->countRows('orders', ['status' => 'delivered']) + $this->gm->countRows('orders', ['status' => 'completed']) ?>,
                         <?= $this->gm->countRows('orders', ['status' => 'cancelled']) ?>
                     ],
-                    backgroundColor: [gold, teal, emerald, red],
+                    backgroundColor: [gold, '#2563eb', '#7c3aed', '#ea580c', emerald, red],
                     borderWidth: 3,
                     borderColor: '#fff'
                 }]
@@ -847,5 +961,227 @@
                 }
             }
         });
+
+        // Vendor Performance Chart (Responsive via AJAX - Vanilla fetch)
+        const vendorCtx = document.getElementById('vendorChart');
+        if (vendorCtx) {
+            let originalVendorData = [];
+            let vendorChartInstance = null;
+            let activeVendorFilter = 'all';
+
+            const vendorSearchInput = document.getElementById('vendor-search-input');
+            const vendorDropdownMenu = document.getElementById('vendor-dropdown-menu');
+            const highPerformersToggle = document.getElementById('high-performers-toggle');
+
+            // Populate statistics directly from Controller passed variable
+            originalVendorData = <?= json_encode($vendor_stats) ?>;
+            
+            // Populate searchable dropdown items
+            originalVendorData.forEach(vendor => {
+                const item = document.createElement('div');
+                item.className = 'rc-dropdown-item';
+                item.setAttribute('data-value', vendor.vendor_id);
+                item.textContent = vendor.name;
+                vendorDropdownMenu.appendChild(item);
+            });
+
+            // Draw initial chart
+            updateChart();
+            setupDropdownEvents();
+
+            // Dropdown show/hide and selection events
+            function setupDropdownEvents() {
+                vendorSearchInput.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    vendorDropdownMenu.classList.add('show');
+                });
+
+                vendorSearchInput.addEventListener('input', function() {
+                    const val = this.value.toLowerCase().trim();
+                    const items = vendorDropdownMenu.querySelectorAll('.rc-dropdown-item');
+                    items.forEach(item => {
+                        const txt = item.textContent.toLowerCase();
+                        if (txt.includes(val)) {
+                            item.style.display = 'block';
+                        } else {
+                            item.style.display = 'none';
+                        }
+                    });
+                });
+
+                vendorDropdownMenu.addEventListener('click', function(e) {
+                    const item = e.target.closest('.rc-dropdown-item');
+                    if (item) {
+                        const val = item.getAttribute('data-value');
+                        activeVendorFilter = val;
+                        
+                        vendorSearchInput.value = val === 'all' ? '' : item.textContent;
+                        vendorSearchInput.placeholder = item.textContent;
+                        
+                        vendorDropdownMenu.querySelectorAll('.rc-dropdown-item').forEach(el => el.classList.remove('active'));
+                        item.classList.add('active');
+                        
+                        vendorDropdownMenu.classList.remove('show');
+                        updateChart();
+                    }
+                });
+
+                // Hide dropdown when clicking outside
+                document.addEventListener('click', function() {
+                    vendorDropdownMenu.classList.remove('show');
+                });
+
+                // Checkbox toggle event
+                highPerformersToggle.addEventListener('change', function() {
+                    updateChart();
+                });
+            }
+
+            function updateChart() {
+                let dataToRender = [...originalVendorData];
+
+                // Apply Searchable Vendor Dropdown filter
+                if (activeVendorFilter !== 'all') {
+                    const vendorId = parseInt(activeVendorFilter);
+                    dataToRender = dataToRender.filter(v => v.vendor_id === vendorId);
+                }
+
+                // Apply "High Performers" filter: Sold products or revenue or orders > 0
+                const showHighPerformers = highPerformersToggle.checked;
+                if (showHighPerformers) {
+                    dataToRender = dataToRender.filter(v => v.revenue > 0 || v.products_sold > 0 || v.orders_count > 0);
+                    // Sort descending by revenue (sequence)
+                    dataToRender.sort((a, b) => b.revenue - a.revenue);
+                }
+
+                const labels = dataToRender.map(item => item.name);
+                const revenues = dataToRender.map(item => item.revenue);
+                const productsSold = dataToRender.map(item => item.products_sold);
+                const ordersCount = dataToRender.map(item => item.orders_count);
+
+                // Destroy existing chart instance to avoid overlaps
+                if (vendorChartInstance) {
+                    vendorChartInstance.destroy();
+                }
+
+                vendorChartInstance = new Chart(vendorCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Revenue (₹)',
+                                data: revenues,
+                                backgroundColor: forest,
+                                borderColor: forest,
+                                borderWidth: 1,
+                                yAxisID: 'yRevenue',
+                                borderRadius: 6,
+                                maxBarThickness: 40
+                            },
+                            {
+                                label: 'Products Sold',
+                                data: productsSold,
+                                backgroundColor: emerald,
+                                borderColor: emerald,
+                                borderWidth: 1,
+                                yAxisID: 'yCounts',
+                                borderRadius: 6,
+                                maxBarThickness: 40
+                            },
+                            {
+                                label: 'Orders Count',
+                                data: ordersCount,
+                                backgroundColor: gold,
+                                borderColor: gold,
+                                borderWidth: 1,
+                                yAxisID: 'yCounts',
+                                borderRadius: 6,
+                                maxBarThickness: 40
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'top',
+                                labels: {
+                                    padding: 10,
+                                    font: { size: 11, weight: '600' },
+                                    usePointStyle: true,
+                                    color: '#0e2a1f'
+                                }
+                            },
+                            tooltip: {
+                                backgroundColor: '#0b3d29',
+                                padding: 12,
+                                borderRadius: 8,
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) {
+                                            label += ': ';
+                                        }
+                                        if (context.dataset.yAxisID === 'yRevenue') {
+                                            label += '₹' + context.raw.toFixed(2);
+                                        } else {
+                                            label += context.raw;
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            yRevenue: {
+                                type: 'linear',
+                                position: 'left',
+                                title: {
+                                    display: true,
+                                    text: 'Revenue (₹)',
+                                    color: forest,
+                                    font: { weight: 'bold' }
+                                },
+                                ticks: {
+                                    color: '#5f7c70',
+                                    callback: function(value) {
+                                        return '₹' + value;
+                                    }
+                                },
+                                grid: {
+                                    color: 'rgba(15,92,62,0.06)'
+                                }
+                            },
+                            yCounts: {
+                                type: 'linear',
+                                position: 'right',
+                                title: {
+                                    display: true,
+                                    text: 'Counts (Orders / Products)',
+                                    color: gold,
+                                    font: { weight: 'bold' }
+                                },
+                                ticks: {
+                                    color: '#5f7c70',
+                                    stepSize: 1
+                                },
+                                grid: {
+                                    drawOnChartArea: false
+                                }
+                            },
+                            x: {
+                                ticks: {
+                                    font: { size: 11, weight: '600' },
+                                    color: '#0e2a1f'
+                                },
+                                grid: { display: false }
+                            }
+                        }
+                    }
+                });
+            }
+        }
     })();
 </script>
