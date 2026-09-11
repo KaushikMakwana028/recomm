@@ -17,7 +17,7 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 | environments.
 |
 */
-$config['base_url'] = 'http://localhost/kaushik_php/ci_project/recomm/';
+$config['base_url'] = 'http://localhost/kaushik/recomm/';
 
 /*
 |--------------------------------------------------------------------------
@@ -129,8 +129,7 @@ $config['subclass_prefix'] = 'MY_';
 |
 | Note: This will NOT disable or override the CodeIgniter-specific
 |	autoloading (application/config/autoload.php)
-*/
-$config['composer_autoload'] = FALSE;
+$config['composer_autoload'] = FCPATH . 'vendor/autoload.php';
 
 /*
 |--------------------------------------------------------------------------

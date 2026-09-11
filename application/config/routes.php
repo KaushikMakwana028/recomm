@@ -119,7 +119,10 @@ $route['api/edit_offer/(:num)'] = 'api/edit_offer/$1';
 $route['api/delete_offer/(:num)'] = 'api/delete_offer/$1';
 $route['api/get_vendor_orders'] = 'api/get_vendor_orders';
 $route['api/update_vendor_order_status'] = 'api/update_vendor_order_status';
+$route['api/order_invoice/(:num)'] = 'api/order_invoice/$1';
 $route['api/get_vendor_stats'] = 'api/get_vendor_stats';
+$route['api/get_customer'] = 'api/get_customer';
+$route['api/get_report'] = 'api/get_report';
 
 // User API Routes
 $route['api/user/register_send_otp'] = 'user/api/register_send_otp';
@@ -178,6 +181,8 @@ $route['api/user/cancel_order'] = 'user/api/cancel_order';
 // Vendor Orders API Routes
 $route['api/user/get_vendor_orders'] = 'user/api/get_vendor_orders';
 $route['api/user/update_vendor_order_status'] = 'user/api/update_vendor_order_status';
+$route['api/user/order_invoice/(:num)'] = 'user/api/order_invoice/$1';
+$route['api/user/download_invoice/(:num)'] = 'user/api/order_invoice/$1';
 
 $route['api/user/test_token'] = 'user/api/test_token';
 $route['api/user/logout'] = 'user/api/logout';

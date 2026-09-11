@@ -1675,7 +1675,23 @@ class Api extends CI_Controller
         $address_id     = (int) ($input_data['address_id'] ?? 0);
         $payment_method = strtolower($input_data['payment_method'] ?? 'cod');
         $notes          = trim($input_data['notes'] ?? '');
-        $delivery_charge = floatval($input_data['delivery_charge'] ?? 0.00);
+
+        // Live delivery charge calculation
+        $distance = isset($input_data['distance']) && $input_data['distance'] !== '' && is_numeric($input_data['distance']) ? floatval($input_data['distance']) : null;
+        $delivery_type = isset($input_data['delivery_type']) ? trim($input_data['delivery_type']) : 'normal'; // 'normal' or 'urgent'
+        $delivery_option = isset($input_data['delivery_option']) ? trim($input_data['delivery_option']) : 'self'; // 'self' or 'delivery_partner'
+
+        if ($distance !== null && $distance >= 0) {
+            $base_charge = $distance * 10.00;
+            if ($delivery_type === 'urgent') {
+                $delivery_charge = $base_charge + 50.00; // Extra charge for urgent delivery
+            } else {
+                $delivery_charge = $base_charge;
+            }
+        } else {
+            // Fallback to client provided delivery charge
+            $delivery_charge = floatval($input_data['delivery_charge'] ?? 0.00);
+        }
 
         if ($address_id <= 0) {
             return $this->output
@@ -1784,6 +1800,9 @@ class Api extends CI_Controller
                 'subtotal'          => $subtotal,
                 'gst_amount'        => $total_gst,
                 'delivery_charge'   => $delivery_charge,
+                'delivery_option'   => $delivery_option,
+                'distance'          => $distance,
+                'delivery_type'     => $delivery_type,
                 'discount'          => $discount,
                 'total_amount'      => $total_amount,
                 'total_items'       => $cart_summary['total_quantity'],
@@ -1827,6 +1846,9 @@ class Api extends CI_Controller
                         'key_id'            => $key_id,
                         'gst_amount'        => $total_gst,
                         'delivery_charge'   => $delivery_charge,
+                        'delivery_option'   => $delivery_option,
+                        'distance'          => $distance,
+                        'delivery_type'     => $delivery_type,
                         'razorpay_order_id' => $gateway['data']['id'],
                     ]
                 ]));
@@ -1842,6 +1864,9 @@ class Api extends CI_Controller
             'subtotal'        => $subtotal,
             'gst_amount'      => $total_gst,
             'delivery_charge' => $delivery_charge,
+            'delivery_option' => $delivery_option,
+            'distance'        => $distance,
+            'delivery_type'   => $delivery_type,
             'discount'        => $discount,
             'total_amount'    => $total_amount,
             'total_items'     => $cart_summary['total_quantity'],
@@ -1880,6 +1905,60 @@ class Api extends CI_Controller
                 'code' => 201,
                 'message' => 'Order placed successfully.',
                 'data' => $this->format_order_full($order_id, $user_id)
+            ]));
+    }
+
+    /**
+     * Calculate live delivery charge
+     */
+    public function calculate_delivery_charge()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+
+        $input_data = json_decode($this->input->raw_input_stream, true);
+        if (empty($input_data)) {
+            $input_data = $this->input->post();
+        }
+
+        $distance = isset($input_data['distance']) && $input_data['distance'] !== '' && is_numeric($input_data['distance']) ? floatval($input_data['distance']) : null;
+        $delivery_type = isset($input_data['delivery_type']) ? trim($input_data['delivery_type']) : 'normal'; // 'normal' or 'urgent'
+
+        if ($distance === null || $distance < 0) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 400,
+                    'message' => 'A valid distance in KM (numeric, positive) is required.',
+                    'data' => null
+                ]));
+        }
+
+        $base_charge = $distance * 10.00;
+        $extra_charge = 0.00;
+
+        if ($delivery_type === 'urgent') {
+            $extra_charge = 50.00; // Extra charge for urgent delivery
+        }
+
+        $delivery_charge = $base_charge + $extra_charge;
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Delivery charge calculated successfully.',
+                'data' => [
+                    'distance' => $distance,
+                    'delivery_type' => $delivery_type,
+                    'base_delivery_charge' => $base_charge,
+                    'extra_delivery_charge' => $extra_charge,
+                    'total_delivery_charge' => $delivery_charge
+                ]
             ]));
     }
 
@@ -2044,9 +2123,15 @@ class Api extends CI_Controller
                 'payment_status'    => $order->payment_status,
                 'total_amount'      => (float) $order->total_amount,
                 'total_items'       => (int) $order->total_items,
+                'delivery_charge'   => (float) $order->delivery_charge,
+                'delivery_option'   => $order->delivery_option ?? null,
+                'distance'          => isset($order->distance) ? (float) $order->distance : null,
+                'delivery_type'     => $order->delivery_type ?? 'normal',
                 'first_item_name'   => $first_item->product_name ?? '',
                 'first_item_image'  => $image_url,
                 'created_at'        => $order->created_at,
+                'invoice_url'       => in_array($order->status, ['out_for_delivery', 'delivered'], true) && !empty($order->invoice_url) ? base_url($order->invoice_url) : (in_array($order->status, ['out_for_delivery', 'delivered'], true) ? base_url('api/user/order_invoice/' . $order->id) : null),
+                'can_download_invoice' => in_array($order->status, ['out_for_delivery', 'delivered'], true),
             ];
         }, $orders);
 
@@ -2307,6 +2392,8 @@ class Api extends CI_Controller
                 'customer_name' => $order->customer_name,
                 'customer_mobile' => $order->customer_mobile,
                 'address' => $address_str,
+                'invoice_url' => !empty($order->invoice_url) ? base_url($order->invoice_url) : base_url('api/user/order_invoice/' . $order->id),
+                'can_download_invoice' => in_array($order->status, ['out_for_delivery', 'delivered'], true),
                 'items' => $vendor_items
             ];
         }
@@ -2382,13 +2469,25 @@ class Api extends CI_Controller
         if ($status === 'accepted') $db_status = 'confirmed';
         if ($status === 'rejected') $db_status = 'cancelled';
 
-        $this->db->where('id', $order_id)->update('orders', [
+        $update_data = [
             'status' => $db_status,
             'updated_at' => date('Y-m-d H:i:s')
-        ]);
+        ];
+
+        $invoice_rel = null;
+        if (in_array($db_status, ['out_for_delivery', 'delivered'], true)) {
+            $invoice_rel = $this->generate_order_invoice_file($order_id, $vendor_id);
+            if ($invoice_rel) {
+                $update_data['invoice_url'] = $invoice_rel;
+            }
+        }
+
+        $this->db->where('id', $order_id)->update('orders', $update_data);
 
         // Log status history
         $this->insert_status_history($order_id, $db_status, $remarks ?: 'Updated by vendor', 'vendor');
+
+        $invoice_url = $invoice_rel ? base_url($invoice_rel) : base_url('api/user/order_invoice/' . $order_id);
 
         return $this->output
             ->set_status_header(200)
@@ -2396,7 +2495,9 @@ class Api extends CI_Controller
                 'status' => true,
                 'code' => 200,
                 'message' => 'Order status updated successfully',
-                'data' => null
+                'data' => [
+                    'invoice_url' => $invoice_url
+                ]
             ]));
     }
 
@@ -3516,6 +3617,9 @@ class Api extends CI_Controller
             'subtotal'           => (float) $order['subtotal'],
             'gst_amount'         => (float) $order['gst_amount'],
             'delivery_charge'    => (float) $order['delivery_charge'],
+            'delivery_option'    => $order['delivery_option'] ?? null,
+            'distance'           => isset($order['distance']) ? (float) $order['distance'] : null,
+            'delivery_type'      => $order['delivery_type'] ?? 'normal',
             'expected_delivery' => $order['expected_delivery_date'] ?? null,
             'discount'           => (float) $order['discount'],
             'total_amount'       => (float) $order['total_amount'],
@@ -3529,7 +3633,8 @@ class Api extends CI_Controller
             'courier_name'       => $order['courier_name'] ?? null,
             'tracking_status'    => $order['tracking_status'] ?? null,
             'pickup_scheduled'   => (bool) ($order['pickup_scheduled'] ?? false),
-            'invoice_url'        => $order['invoice_url'] ?? null,
+            'invoice_url'        => in_array($order['status'], ['out_for_delivery', 'delivered'], true) && !empty($order['invoice_url']) ? base_url($order['invoice_url']) : (in_array($order['status'], ['out_for_delivery', 'delivered'], true) ? base_url('api/user/order_invoice/' . $order['id']) : null),
+            'can_download_invoice' => in_array($order['status'], ['out_for_delivery', 'delivered'], true),
             'items'              => $items,
             'delivery_address'   => $delivery_address,
             'status_history'     => $status_history,
@@ -3686,6 +3791,15 @@ class Api extends CI_Controller
         }
         if (!$this->db->field_exists('delivery_charge', 'orders')) {
             $this->db->query("ALTER TABLE `orders` ADD COLUMN `delivery_charge` DECIMAL(10,2) DEFAULT 0.00");
+        }
+        if (!$this->db->field_exists('delivery_option', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `delivery_option` VARCHAR(50) DEFAULT 'self'");
+        }
+        if (!$this->db->field_exists('distance', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `distance` DECIMAL(10,2) DEFAULT NULL");
+        }
+        if (!$this->db->field_exists('delivery_type', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `delivery_type` VARCHAR(50) DEFAULT 'normal'");
         }
         if (!$this->db->field_exists('discount', 'orders')) {
             $this->db->query("ALTER TABLE `orders` ADD COLUMN `discount` DECIMAL(10,2) DEFAULT 0.00");
@@ -3914,5 +4028,407 @@ class Api extends CI_Controller
                 ->_display();
             exit;
         }
+    }
+
+    public function order_invoice($order_id)
+    {
+        $order_id = intval($order_id);
+        if ($order_id <= 0) {
+            show_404();
+            return;
+        }
+
+        $dir = FCPATH . 'assets/uploads/invoices/';
+        $filepath = $dir . 'invoice_' . $order_id . '.pdf';
+
+        if (!file_exists($filepath)) {
+            $this->generate_order_invoice_file($order_id);
+        }
+
+        if (!file_exists($filepath)) {
+            show_404();
+            return;
+        }
+
+        $order = $this->db->get_where('orders', ['id' => $order_id])->row();
+        $order_number = $order ? ($order->order_number ?: ('ORD-' . $order->id)) : ('ORD-' . $order_id);
+
+        $disposition = $this->input->get('download') ? 'attachment' : 'inline';
+        $filesize = filesize($filepath);
+
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: ' . $disposition . '; filename="Invoice_' . $order_number . '.pdf"');
+        header('Content-Length: ' . $filesize);
+        header('Cache-Control: private, max-age=0, must-revalidate');
+        header('Pragma: public');
+
+        readfile($filepath);
+        exit;
+    }
+
+    public function generate_order_invoice_file($order_id, $vendor_id = null)
+    {
+        $dir = FCPATH . 'assets/uploads/invoices/';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+
+        $pdf_content = $this->generate_order_invoice_pdf($order_id, $vendor_id);
+        if (!$pdf_content) {
+            return false;
+        }
+
+        $filename = 'invoice_' . $order_id . '.pdf';
+        $filepath = $dir . $filename;
+        @file_put_contents($filepath, $pdf_content);
+        return 'assets/uploads/invoices/' . $filename;
+    }
+
+    public function generate_order_invoice_pdf($order_id, $vendor_id = null)
+    {
+        $html = $this->generate_order_invoice_html($order_id, $vendor_id);
+        if (!$html) {
+            return null;
+        }
+
+        try {
+            if (!class_exists('Dompdf\Dompdf')) {
+                $autoload = FCPATH . 'vendor/autoload.php';
+                if (file_exists($autoload)) {
+                    require_once $autoload;
+                }
+            }
+
+            $options = new \Dompdf\Options();
+            $options->set('isHtml5ParserEnabled', true);
+            $options->set('isRemoteEnabled', true);
+            $options->set('defaultFont', 'DejaVu Sans');
+
+            $dompdf = new \Dompdf\Dompdf($options);
+            $dompdf->loadHtml($html);
+            $dompdf->setPaper('A4', 'portrait');
+            $dompdf->render();
+            return $dompdf->output();
+        } catch (\Exception $e) {
+            log_message('error', 'Dompdf generation error: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    public function generate_order_invoice_html($order_id, $vendor_id = null)
+    {
+        $order = $this->db->get_where('orders', ['id' => $order_id])->row();
+        if (!$order) {
+            return null;
+        }
+
+        $customer = $this->db->get_where('users', ['id' => $order->user_id])->row();
+        $address = $this->db->get_where('user_addresses', ['id' => $order->address_id])->row();
+
+        $this->db->where('order_id', $order_id);
+        if ($vendor_id) {
+            $this->db->where('vendor_id', $vendor_id);
+        }
+        $items = $this->db->get('order_items')->result();
+        if (empty($items)) {
+            $items = $this->db->where('order_id', $order_id)->get('order_items')->result();
+        }
+        if (empty($items)) {
+            return null;
+        }
+
+        $actual_vendor_id = $vendor_id ?: ($items[0]->vendor_id ?? 0);
+        $vendor = $this->db->get_where('users', ['id' => $actual_vendor_id])->row();
+
+        $subtotal = 0.00;
+        $items_rows = '';
+        $idx = 1;
+        foreach ($items as $item) {
+            $line_total = ($item->price * $item->quantity);
+            $subtotal += $line_total;
+            $p_name = htmlspecialchars($item->product_name);
+            $p_qty = (int)$item->quantity;
+            $p_price = number_format((float)$item->price, 2);
+            $p_line = number_format((float)$line_total, 2);
+            $bg = ($idx % 2 === 0) ? '#fbfcfe' : '#ffffff';
+
+            $items_rows .= "
+                <tr style='background-color: {$bg};'>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #64748b;'>{$idx}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #00204E;'>{$p_name}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #334155;'>{$p_qty}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;'>&#8377; {$p_price}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold; color: #34A129;'>&#8377; {$p_line}</td>
+                </tr>
+            ";
+            $idx++;
+        }
+
+        $is_urgent = (isset($order->delivery_type) && strtolower($order->delivery_type) === 'urgent');
+        $urgent_charge = $is_urgent ? 50.00 : 0.00;
+        $delivery_charge = floatval($order->delivery_charge ?? 0.00);
+        $base_delivery_charge = ($is_urgent && $delivery_charge >= 50) ? ($delivery_charge - 50.00) : $delivery_charge;
+        $grand_total = floatval($order->total_amount ?? ($subtotal + $delivery_charge));
+
+        $order_number = htmlspecialchars($order->order_number ?? ('ORD-' . $order->id));
+        $date_str = date('d M Y, h:i A', strtotime($order->created_at ?: ($order->created_on ?: 'now')));
+
+        $vendor_name = htmlspecialchars($vendor->store_name ?? ($vendor->name ?? 'Recomm Vendor Store'));
+        $vendor_owner = htmlspecialchars($vendor->owner_name ?? ($vendor->name ?? 'Store Owner'));
+        $vendor_phone = htmlspecialchars($vendor->mobile ?? ($vendor->contact_number ?? ''));
+        $vendor_addr = htmlspecialchars($vendor->address ?? 'Store Address');
+        $vendor_pin = htmlspecialchars($vendor->pincode ?? '');
+
+        $cust_name = htmlspecialchars($address->full_name ?? ($customer->name ?? 'Valued Customer'));
+        $cust_phone = htmlspecialchars($address->mobile ?? ($customer->mobile ?? ''));
+        $cust_addr = $address ? htmlspecialchars("{$address->address_line1}, {$address->city} - {$address->pincode}") : 'Customer Delivery Address';
+
+        $pay_method = strtoupper(htmlspecialchars($order->payment_method ?? 'COD'));
+        $pay_status = strtoupper(htmlspecialchars($order->payment_status ?? 'PENDING'));
+        $del_mode = ($order->delivery_option === 'self') ? 'By Self' : 'Delivery Partner';
+        $distance_km = $order->distance ? floatval($order->distance) . ' KM' : '';
+
+        $urgent_badge = $is_urgent
+            ? '<span style="background-color:#fef2f2; color:#dc2626; border:1px solid #fecaca; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">⚡ URGENT DELIVERY</span>'
+            : '<span style="background-color:#f0fdf4; color:#166534; border:1px solid #bbf7d0; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">STANDARD DELIVERY</span>';
+
+        $urgent_row = $is_urgent ? "
+            <tr>
+                <td style='padding: 5px 6px; color: #dc2626; font-weight: bold;'>⚡ Urgent Delivery Surcharge:</td>
+                <td style='padding: 5px 6px; text-align: right; color: #dc2626; font-weight: bold;'>+ &#8377; " . number_format($urgent_charge, 2) . "</td>
+            </tr>" : "";
+
+        $base_delivery_row = $base_delivery_charge > 0 ? "
+            <tr>
+                <td style='padding: 5px 6px; color: #64748b;'>Delivery Charge" . ($distance_km ? " ({$distance_km})" : "") . ":</td>
+                <td style='padding: 5px 6px; text-align: right; color: #334155; font-weight: bold;'>+ &#8377; " . number_format($base_delivery_charge, 2) . "</td>
+            </tr>" : "";
+
+        $subtotal_fmt = number_format($subtotal, 2);
+        $total_fmt = number_format($grand_total, 2);
+
+        return '<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<title>Invoice - ' . $order_number . '</title>
+<style>
+    @page {
+        margin: 12mm 15mm;
+        size: A4 portrait;
+    }
+    body {
+        font-family: "DejaVu Sans", sans-serif;
+        font-size: 11px;
+        color: #1e293b;
+        margin: 0;
+        padding: 0;
+        line-height: 1.4;
+    }
+    .top-bar {
+        height: 6px;
+        background-color: #00204E;
+        margin-bottom: 16px;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .header-table td {
+        vertical-align: top;
+    }
+    .brand-title {
+        font-size: 24px;
+        font-weight: bold;
+        color: #00204E;
+        letter-spacing: -0.5px;
+    }
+    .brand-sub {
+        font-size: 10px;
+        font-weight: bold;
+        color: #34A129;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 2px;
+    }
+    .invoice-title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #00204E;
+        text-align: right;
+    }
+    .invoice-num {
+        font-size: 13px;
+        font-weight: bold;
+        color: #34A129;
+        text-align: right;
+        margin-top: 2px;
+    }
+    .invoice-date {
+        font-size: 11px;
+        color: #64748b;
+        text-align: right;
+        margin-top: 3px;
+    }
+    .section-divider {
+        border-bottom: 1.5px solid #e2e8f0;
+        margin: 14px 0;
+    }
+    .parties-table {
+        margin-bottom: 14px;
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+    }
+    .parties-table td {
+        width: 50%;
+        padding: 12px 14px;
+        vertical-align: top;
+    }
+    .party-heading {
+        font-size: 10px;
+        font-weight: bold;
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+    }
+    .party-name {
+        font-size: 13px;
+        font-weight: bold;
+        color: #00204E;
+        margin-bottom: 3px;
+    }
+    .party-info {
+        font-size: 11px;
+        color: #475569;
+        line-height: 1.4;
+    }
+    .meta-table {
+        background-color: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 16px;
+    }
+    .meta-table td {
+        padding: 8px 12px;
+        font-size: 11px;
+    }
+    .items-table {
+        margin-bottom: 16px;
+    }
+    .items-table th {
+        background-color: #00204E;
+        color: #ffffff;
+        font-size: 10px;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 8px 10px;
+        text-align: left;
+    }
+    .totals-table {
+        width: 320px;
+        margin-left: auto;
+    }
+    .totals-table td {
+        padding: 4px 6px;
+        font-size: 11px;
+    }
+    .grand-total-row td {
+        border-top: 2px solid #00204E;
+        border-bottom: 2px solid #00204E;
+        font-size: 14px;
+        font-weight: bold;
+        color: #00204E;
+        padding: 8px 6px;
+    }
+    .footer {
+        margin-top: 26px;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 12px;
+        text-align: center;
+        font-size: 10px;
+        color: #64748b;
+    }
+</style>
+</head>
+<body>
+    <div class="top-bar"></div>
+
+    <table class="header-table">
+        <tr>
+            <td style="width: 55%;">
+                <div class="brand-title">RECOMM</div>
+                <div class="brand-sub">Smart Store & Quick Delivery</div>
+            </td>
+            <td style="width: 45%;">
+                <div class="invoice-title">TAX INVOICE</div>
+                <div class="invoice-num">#' . $order_number . '</div>
+                <div class="invoice-date">Date: ' . $date_str . '</div>
+            </td>
+        </tr>
+    </table>
+
+    <div class="section-divider"></div>
+
+    <table class="parties-table">
+        <tr>
+            <td>
+                <div class="party-heading">Sold By (Vendor)</div>
+                <div class="party-name">' . $vendor_name . '</div>'
+                . ($vendor_owner ? '<div class="party-info">Owner: ' . $vendor_owner . '</div>' : '')
+                . ($vendor_phone ? '<div class="party-info">Mobile: ' . $vendor_phone . '</div>' : '')
+                . '<div class="party-info">' . $vendor_addr . ($vendor_pin ? ' - ' . $vendor_pin : '') . '</div>
+            </td>
+            <td style="border-left: 1px solid #e2e8f0;">
+                <div class="party-heading">Billed & Delivered To</div>
+                <div class="party-name">' . $cust_name . '</div>'
+                . ($cust_phone ? '<div class="party-info">Mobile: ' . $cust_phone . '</div>' : '')
+                . '<div class="party-info">' . $cust_addr . '</div>
+            </td>
+        </tr>
+    </table>
+
+    <table class="meta-table">
+        <tr>
+            <td><strong>Payment:</strong> ' . $pay_method . ' (' . $pay_status . ')</td>
+            <td><strong>Mode:</strong> ' . $del_mode . ($distance_km ? ' (' . $distance_km . ')' : '') . '</td>
+            <td><strong>Type:</strong> ' . $urgent_badge . '</td>
+        </tr>
+    </table>
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width: 8%; text-align: center;">#</th>
+                <th style="width: 48%;">Item Description</th>
+                <th style="width: 12%; text-align: center;">Qty</th>
+                <th style="width: 16%; text-align: right;">Price</th>
+                <th style="width: 16%; text-align: right;">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            ' . $items_rows . '
+        </tbody>
+    </table>
+
+    <table class="totals-table">
+        <tr>
+            <td style="color: #64748b; padding: 5px 6px;">Items Subtotal:</td>
+            <td style="text-align: right; font-weight: bold; padding: 5px 6px;">&#8377; ' . $subtotal_fmt . '</td>
+        </tr>
+        ' . $base_delivery_row . '
+        ' . $urgent_row . '
+        <tr class="grand-total-row">
+            <td>Grand Total:</td>
+            <td style="text-align: right; color: #34A129;">&#8377; ' . $total_fmt . '</td>
+        </tr>
+    </table>
+
+    <div class="footer">
+        <p style="font-weight: bold; color: #00204E; margin: 0 0 4px;">Thank you for shopping with Recomm!</p>
+        <p style="margin: 0;">This is a computer-generated tax invoice and does not require a physical signature.</p>
+    </div>
+</body>
+</html>';
     }
 }

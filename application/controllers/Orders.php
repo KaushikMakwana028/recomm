@@ -36,6 +36,7 @@ class Orders extends MY_Controller
 
     public function view($id)
     {
+        $this->ensure_orders_table();
         $this->setPageTitle('Order Details');
 
         // Fetch order with customer details
@@ -83,15 +84,54 @@ class Orders extends MY_Controller
 
     public function update_status()
     {
+        $this->ensure_orders_table();
         if ($this->input->method() == 'post') {
             $order_id = $this->post('order_id');
             $status = $this->post('status');
             $remarks = $this->post('remarks') ?: 'Status updated by Admin';
 
+            $delivery_option = $this->post('delivery_option');
+            $distance_val = $this->post('distance');
+            $delivery_type = $this->post('delivery_type') ?: 'normal';
+
             $order = $this->gm->getById('orders', $order_id);
             if ($order) {
+                $update_fields = [
+                    'status' => $status,
+                    'updated_at' => date('Y-m-d H:i:s')
+                ];
+
+                if ($delivery_option !== null && $delivery_option !== '') {
+                    $update_fields['delivery_option'] = $delivery_option;
+                }
+
+                $distance = null;
+                if ($distance_val !== null && $distance_val !== '' && is_numeric($distance_val)) {
+                    $distance = floatval($distance_val);
+                    $update_fields['distance'] = $distance;
+                } else {
+                    $update_fields['distance'] = null;
+                }
+
+                $update_fields['delivery_type'] = $delivery_type;
+
+                // Calculate delivery charge if distance is set
+                if ($distance !== null && $distance >= 0) {
+                    $base_charge = $distance * 10.00;
+                    if ($delivery_type === 'urgent') {
+                        $delivery_charge = $base_charge + 50.00;
+                    } else {
+                        $delivery_charge = $base_charge;
+                    }
+                    $update_fields['delivery_charge'] = $delivery_charge;
+                    $update_fields['total_amount'] = floatval($order->subtotal) + floatval($order->gst_amount) + $delivery_charge - floatval($order->discount);
+                } else {
+                    $update_fields['delivery_charge'] = 0.00;
+                    $update_fields['total_amount'] = floatval($order->subtotal) + floatval($order->gst_amount) - floatval($order->discount);
+                }
+
                 // Update order status
-                $this->gm->update('orders', ['status' => $status], ['id' => $order_id]);
+                $this->gm->update('orders', $update_fields, ['id' => $order_id]);
 
                 // Insert into history
                 $history_data = [
@@ -109,5 +149,18 @@ class Orders extends MY_Controller
             }
         }
         redirect('orders/view/' . $order_id);
+    }
+
+    private function ensure_orders_table()
+    {
+        if (!$this->db->field_exists('delivery_option', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `delivery_option` VARCHAR(50) DEFAULT 'self'");
+        }
+        if (!$this->db->field_exists('distance', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `distance` DECIMAL(10,2) DEFAULT NULL");
+        }
+        if (!$this->db->field_exists('delivery_type', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `delivery_type` VARCHAR(50) DEFAULT 'normal'");
+        }
     }
 }

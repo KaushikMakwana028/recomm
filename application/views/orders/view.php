@@ -775,6 +775,46 @@
                 <?php endif; ?>
             </div>
 
+            <!-- Delivery Setup Card -->
+            <div class="rc-card">
+                <div class="rc-card-header">
+                    <i class="fas fa-shipping-fast"></i>
+                    <h3>Delivery Details</h3>
+                </div>
+                <div class="rc-meta-item">
+                    <div class="rc-meta-icon"><i class="fas fa-truck"></i></div>
+                    <div class="rc-meta-content">
+                        <span class="rc-meta-label">Delivery Option</span>
+                        <span class="rc-meta-value"><?= htmlspecialchars($order->delivery_option ? ($order->delivery_option == 'self' ? 'By Self' : 'Delivery Partner') : '-') ?></span>
+                    </div>
+                </div>
+                <div class="rc-meta-item">
+                    <div class="rc-meta-icon"><i class="fas fa-route"></i></div>
+                    <div class="rc-meta-content">
+                        <span class="rc-meta-label">Distance</span>
+                        <span class="rc-meta-value"><?= $order->distance !== null ? htmlspecialchars($order->distance) . ' KM' : '-' ?></span>
+                    </div>
+                </div>
+                <div class="rc-meta-item">
+                    <div class="rc-meta-icon"><i class="fas fa-tachometer-alt"></i></div>
+                    <div class="rc-meta-content">
+                        <span class="rc-meta-label">Delivery Type</span>
+                        <span class="rc-meta-value">
+                            <span class="badge bg-<?= ($order->delivery_type == 'urgent') ? 'danger' : 'info' ?>">
+                                <?= htmlspecialchars(ucfirst($order->delivery_type ?: 'normal')) ?> Delivery
+                            </span>
+                        </span>
+                    </div>
+                </div>
+                <div class="rc-meta-item">
+                    <div class="rc-meta-icon"><i class="fas fa-rupee-sign"></i></div>
+                    <div class="rc-meta-content">
+                        <span class="rc-meta-label">Delivery Charge</span>
+                        <span class="rc-meta-value" style="font-weight: 700;">₹<?= number_format($order->delivery_charge ?: 0, 2) ?></span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Status Form Card -->
             <div class="rc-card">
                 <div class="rc-card-header">
@@ -792,6 +832,25 @@
                             <option value="out_for_delivery" <?= ($order->status == 'out_for_delivery') ? 'selected' : '' ?>>Out for Delivery</option>
                             <option value="delivered" <?= ($order->status == 'delivered') ? 'selected' : '' ?>>Delivered</option>
                             <option value="cancelled" <?= ($order->status == 'cancelled') ? 'selected' : '' ?>>Cancelled</option>
+                        </select>
+                    </div>
+                    <div class="rc-form-group">
+                        <label class="rc-form-label" for="delivery-option-select">Delivery Option</label>
+                        <select name="delivery_option" id="delivery-option-select" class="rc-select">
+                            <option value="">-- Select Option --</option>
+                            <option value="self" <?= ($order->delivery_option == 'self') ? 'selected' : '' ?>>By Self</option>
+                            <option value="delivery_partner" <?= ($order->delivery_option == 'delivery_partner') ? 'selected' : '' ?>>Delivery Partner</option>
+                        </select>
+                    </div>
+                    <div class="rc-form-group">
+                        <label class="rc-form-label" for="distance-input">Distance (in KM)</label>
+                        <input type="number" step="0.1" name="distance" id="distance-input" class="rc-select" value="<?= htmlspecialchars($order->distance ?: '') ?>" placeholder="e.g. 5.5">
+                    </div>
+                    <div class="rc-form-group">
+                        <label class="rc-form-label" for="delivery-type-select">Delivery Type</label>
+                        <select name="delivery_type" id="delivery-type-select" class="rc-select">
+                            <option value="normal" <?= ($order->delivery_type == 'normal') ? 'selected' : '' ?>>Normal Delivery</option>
+                            <option value="urgent" <?= ($order->delivery_type == 'urgent') ? 'selected' : '' ?>>Urgent Delivery</option>
                         </select>
                     </div>
                     <div class="rc-form-group">

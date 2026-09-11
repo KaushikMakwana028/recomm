@@ -484,7 +484,7 @@ class Api extends CI_Controller
         }
 
         $user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
             ->where('id', $id)
             ->get('users')
             ->row();
@@ -522,6 +522,7 @@ class Api extends CI_Controller
                 'gst_number' => $user->gst_number,
                 'contact_number' => $user->contact_number,
                 'address' => $user->address,
+                'pincode' => $user->pincode,
                 'opening_time' => $user->opening_time,
                 'closing_time' => $user->closing_time,
                 'is_holiday' => (int)$user->is_holiday,
@@ -624,6 +625,10 @@ class Api extends CI_Controller
 
         if ($this->input->post('address')) {
             $update_data['address'] = trim($this->input->post('address'));
+        }
+
+        if ($this->input->post('pincode') !== null) {
+            $update_data['pincode'] = trim($this->input->post('pincode'));
         }
 
         if ($this->input->post('opening_time')) {
@@ -762,7 +767,7 @@ class Api extends CI_Controller
 
         // Get updated user
         $updated_user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
             ->where('id', $user_id)
             ->get('users')
             ->row();
@@ -784,6 +789,7 @@ class Api extends CI_Controller
                     'gst_number' => $updated_user->gst_number,
                     'contact_number' => $updated_user->contact_number,
                     'address' => $updated_user->address,
+                    'pincode' => $updated_user->pincode,
                     'opening_time' => $updated_user->opening_time,
                     'closing_time' => $updated_user->closing_time,
                     'is_holiday' => (int)$updated_user->is_holiday,
@@ -2539,11 +2545,17 @@ class Api extends CI_Controller
                 'status' => $vendor_display_status,
                 'payment_method' => $order->payment_method,
                 'payment_status' => $order->payment_status,
-                'total_amount' => round($vendor_total, 2),
+                'total_amount' => round($vendor_total + (float)$order->delivery_charge, 2),
+                'delivery_option' => $order->delivery_option,
+                'delivery_charge' => (float)$order->delivery_charge,
+                'distance' => $order->distance ? (float)$order->distance : null,
+                'delivery_type' => $order->delivery_type ?? 'normal',
                 'created_at' => $order->created_at,
                 'customer_name' => $order->customer_name ?? 'Unknown',
                 'customer_mobile' => $order->customer_mobile ?? '',
                 'address' => $address_str,
+                'invoice_url' => !empty($order->invoice_url) ? base_url($order->invoice_url) : base_url('api/order_invoice/' . $order->id),
+                'can_download_invoice' => in_array($order->status, ['out_for_delivery', 'delivered'], true),
                 'items' => $vendor_items
             ];
         }
@@ -2653,12 +2665,81 @@ class Api extends CI_Controller
                 ]));
         }
 
+        $delivery_option = null;
+        $distance = null;
+        $delivery_charge = null;
+        $total_amount = null;
+
+        if (in_array($db_status, ['out_for_delivery', 'delivered'], true)) {
+            $delivery_option = isset($input_data['delivery_option']) ? trim($input_data['delivery_option']) : '';
+            $distance_val = isset($input_data['distance']) ? $input_data['distance'] : '';
+
+            // Check if already set in database
+            $existing_delivery_option = isset($order->delivery_option) ? $order->delivery_option : '';
+            $existing_distance = isset($order->distance) ? $order->distance : null;
+
+            // If not provided in request, check if already in DB
+            if (empty($delivery_option) && !empty($existing_delivery_option)) {
+                $delivery_option = $existing_delivery_option;
+            }
+            if (($distance_val === null || $distance_val === '') && $existing_distance !== null) {
+                $distance = floatval($existing_distance);
+            } else {
+                $distance = ($distance_val !== null && $distance_val !== '' && is_numeric($distance_val)) ? floatval($distance_val) : null;
+            }
+
+            // Validate delivery_option
+            if (empty($delivery_option) || !in_array($delivery_option, ['self', 'delivery_partner'], true)) {
+                return $this->output
+                    ->set_status_header(422)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 422,
+                        'message' => 'Delivery option is required when shipping or delivering. Choose either "self" or "delivery_partner".',
+                        'data' => null
+                    ]));
+            }
+
+            // Validate distance
+            if ($distance === null || $distance < 0) {
+                return $this->output
+                    ->set_status_header(422)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 422,
+                        'message' => 'A valid distance in KM (numeric, positive) is required when shipping or delivering.',
+                        'data' => null
+                    ]));
+            }
+
+            // Calculate delivery charge (10 Rs per KM)
+            $delivery_charge = $distance * 10.00;
+            if (isset($order->delivery_type) && $order->delivery_type === 'urgent') {
+                $delivery_charge += 50.00;
+            }
+            // Calculate new total amount
+            $total_amount = floatval($order->subtotal) + floatval($order->gst_amount) + $delivery_charge - floatval($order->discount);
+        }
+
         $this->db->trans_begin();
 
         $update_fields = [
             'status' => $db_status,
             'updated_at' => date('Y-m-d H:i:s')
         ];
+
+        if ($delivery_option !== null) {
+            $update_fields['delivery_option'] = $delivery_option;
+        }
+        if ($distance !== null) {
+            $update_fields['distance'] = $distance;
+        }
+        if ($delivery_charge !== null) {
+            $update_fields['delivery_charge'] = $delivery_charge;
+        }
+        if ($total_amount !== null) {
+            $update_fields['total_amount'] = $total_amount;
+        }
 
         // Cash on delivery payment update on delivery
         if ($db_status === 'delivered') {
@@ -2692,13 +2773,27 @@ class Api extends CI_Controller
 
         $this->db->trans_commit();
 
+        $invoice_rel = null;
+        if (in_array($db_status, ['out_for_delivery', 'delivered'], true)) {
+            $invoice_rel = $this->generate_order_invoice_file($order_id, $vendor_id);
+            if ($invoice_rel) {
+                $this->db->where('id', $order_id)->update('orders', ['invoice_url' => $invoice_rel]);
+            }
+        }
+
+        $invoice_url = $invoice_rel ? base_url($invoice_rel) : (!empty($order->invoice_url) ? base_url($order->invoice_url) : base_url('api/order_invoice/' . $order_id));
+
         return $this->output
             ->set_status_header(200)
             ->set_output(json_encode([
                 'status' => true,
                 'code' => 200,
                 'message' => 'Order status updated successfully',
-                'data' => null
+                'data' => [
+                    'delivery_charge' => $delivery_charge !== null ? (float)$delivery_charge : null,
+                    'total_amount' => $total_amount !== null ? round($total_amount, 2) : null,
+                    'invoice_url' => $invoice_url
+                ]
             ]));
     }
 
@@ -2873,6 +2968,292 @@ class Api extends CI_Controller
             ]));
     }
 
+    public function get_customer()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        // Auth check
+        $authHeader = $this->input->get_request_header('Authorization', TRUE);
+        $token = null;
+        if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+            $token = $matches[1];
+        }
+
+        $decoded = $this->verify_jwt($token);
+        if (!$decoded || empty($decoded->data->id)) {
+            return $this->output
+                ->set_status_header(401)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 401,
+                    'message' => 'Unauthorized',
+                    'data' => null
+                ]));
+        }
+
+        $vendor_id = (int)$decoded->data->id;
+
+        // Fetch customers who placed orders containing this vendor's products
+        $this->db->select('users.id, users.name, users.mobile, users.email, users.address, users.profile_image, users.created_on');
+        $this->db->from('users');
+        $this->db->join('orders', 'orders.user_id = users.id', 'inner');
+        $this->db->join('order_items', 'order_items.order_id = orders.id', 'inner');
+        $this->db->where('order_items.vendor_id', $vendor_id);
+        $this->db->group_by('users.id');
+        $this->db->order_by('users.name', 'ASC');
+
+        $customers = $this->db->get()->result();
+
+        $customer_list = [];
+        foreach ($customers as $c) {
+            $customer_list[] = [
+                'id' => (int)$c->id,
+                'name' => $c->name,
+                'mobile' => $c->mobile,
+                'email' => $c->email,
+                'address' => $c->address,
+                'profile_image' => !empty($c->profile_image) ? base_url($c->profile_image) : null,
+                'created_on' => $c->created_on
+            ];
+        }
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Customers retrieved successfully',
+                'data' => $customer_list
+            ]));
+    }
+
+    public function get_report()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        // Auth check
+        $authHeader = $this->input->get_request_header('Authorization', TRUE);
+        $token = null;
+        if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+            $token = $matches[1];
+        }
+
+        $decoded = $this->verify_jwt($token);
+        if (!$decoded || empty($decoded->data->id)) {
+            return $this->output
+                ->set_status_header(401)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 401,
+                    'message' => 'Unauthorized',
+                    'data' => null
+                ]));
+        }
+
+        $vendor_id = (int)$decoded->data->id;
+        $filter = trim($this->input->get('filter', TRUE) ?? 'daily');
+
+        // Define date range
+        if ($filter === 'weekly') {
+            $start_date = date('Y-m-d 00:00:00', strtotime('-6 days'));
+            $end_date = date('Y-m-d 23:59:59');
+        } elseif ($filter === 'monthly') {
+            $start_date = date('Y-m-d 00:00:00', strtotime('-29 days'));
+            $end_date = date('Y-m-d 23:59:59');
+        } else { // default 'daily'
+            $start_date = date('Y-m-d 00:00:00');
+            $end_date = date('Y-m-d 23:59:59');
+        }
+
+        // Fetch all matching order items with category details
+        $this->db->select('oi.*, o.created_at, c.name as category_name');
+        $this->db->from('order_items oi');
+        $this->db->join('orders o', 'o.id = oi.order_id', 'inner');
+        $this->db->join('vendor_products vp', 'vp.id = oi.product_id', 'left');
+        $this->db->join('categories c', 'c.id = vp.category_id', 'left');
+        $this->db->where('oi.vendor_id', $vendor_id);
+        $this->db->where('o.status !=', 'cancelled');
+        $this->db->where('o.created_at >=', $start_date);
+        $this->db->where('o.created_at <=', $end_date);
+        $order_items = $this->db->get()->result();
+
+        // Calculate card metrics
+        $total_sales = 0.00;
+        $unique_orders = [];
+        foreach ($order_items as $item) {
+            $revenue = (float)$item->subtotal + (float)$item->gst_amount;
+            $total_sales += $revenue;
+            $unique_orders[$item->order_id] = true;
+        }
+        $total_orders = count($unique_orders);
+        $avg_order_value = $total_orders > 0 ? round($total_sales / $total_orders, 2) : 0.00;
+
+        // Calculate Sales Chart Data
+        $chart_data = [];
+        if ($filter === 'weekly') {
+            $labels = [];
+            $chart_buckets = [];
+            for ($i = 6; $i >= 0; $i--) {
+                $date = date('Y-m-d', strtotime("-$i days"));
+                $labels[] = date('D', strtotime($date)); // e.g. "Mon"
+                $chart_buckets[$date] = 0.00;
+            }
+
+            foreach ($order_items as $item) {
+                $date = date('Y-m-d', strtotime($item->created_at));
+                $revenue = (float)$item->subtotal + (float)$item->gst_amount;
+                if (isset($chart_buckets[$date])) {
+                    $chart_buckets[$date] += $revenue;
+                }
+            }
+
+            $chart_data = [
+                'labels' => $labels,
+                'values' => array_values($chart_buckets)
+            ];
+        } elseif ($filter === 'monthly') {
+            $labels = ["Week 1", "Week 2", "Week 3", "Week 4"];
+            $chart_buckets = [0.00, 0.00, 0.00, 0.00];
+
+            foreach ($order_items as $item) {
+                $days_ago = (time() - strtotime($item->created_at)) / 86400;
+                $revenue = (float)$item->subtotal + (float)$item->gst_amount;
+                if ($days_ago >= 21 && $days_ago < 30) {
+                    $chart_buckets[0] += $revenue;
+                } elseif ($days_ago >= 14 && $days_ago < 21) {
+                    $chart_buckets[1] += $revenue;
+                } elseif ($days_ago >= 7 && $days_ago < 14) {
+                    $chart_buckets[2] += $revenue;
+                } elseif ($days_ago >= 0 && $days_ago < 7) {
+                    $chart_buckets[3] += $revenue;
+                }
+            }
+
+            $chart_data = [
+                'labels' => $labels,
+                'values' => $chart_buckets
+            ];
+        } else { // daily
+            $labels = ["8 AM", "10 AM", "12 PM", "2 PM", "4 PM", "6 PM", "8 PM"];
+            $chart_buckets = array_fill_keys($labels, 0.00);
+
+            foreach ($order_items as $item) {
+                $hour = (int)date('H', strtotime($item->created_at));
+                $revenue = (float)$item->subtotal + (float)$item->gst_amount;
+                if ($hour < 10) {
+                    $chart_buckets["8 AM"] += $revenue;
+                } elseif ($hour >= 10 && $hour < 12) {
+                    $chart_buckets["10 AM"] += $revenue;
+                } elseif ($hour >= 12 && $hour < 14) {
+                    $chart_buckets["12 PM"] += $revenue;
+                } elseif ($hour >= 14 && $hour < 16) {
+                    $chart_buckets["2 PM"] += $revenue;
+                } elseif ($hour >= 16 && $hour < 18) {
+                    $chart_buckets["4 PM"] += $revenue;
+                } elseif ($hour >= 18 && $hour < 20) {
+                    $chart_buckets["6 PM"] += $revenue;
+                } else {
+                    $chart_buckets["8 PM"] += $revenue;
+                }
+            }
+
+            $chart_data = [
+                'labels' => $labels,
+                'values' => array_values($chart_buckets)
+            ];
+        }
+
+        // Calculate Category Distribution
+        $category_stats = [];
+        $cat_total_revenue = 0.00;
+        foreach ($order_items as $item) {
+            $cat_name = $item->category_name ?: 'Others';
+            $revenue = (float)$item->subtotal + (float)$item->gst_amount;
+            if (!isset($category_stats[$cat_name])) {
+                $category_stats[$cat_name] = 0.00;
+            }
+            $category_stats[$cat_name] += $revenue;
+            $cat_total_revenue += $revenue;
+        }
+
+        $category_distribution = [];
+        foreach ($category_stats as $cat => $sales) {
+            $percentage = $cat_total_revenue > 0 ? round(($sales / $cat_total_revenue) * 100, 2) : 0;
+            $category_distribution[] = [
+                'category' => $cat,
+                'sales' => (float)$sales,
+                'percentage' => (float)$percentage
+            ];
+        }
+
+        // Calculate Top Selling Products
+        $product_stats = [];
+        foreach ($order_items as $item) {
+            $p_id = $item->product_id;
+            $p_name = $item->product_name;
+            $revenue = (float)$item->subtotal + (float)$item->gst_amount;
+            $qty = (int)$item->quantity;
+
+            if (!isset($product_stats[$p_id])) {
+                $product_stats[$p_id] = [
+                    'product_name' => $p_name,
+                    'units_sold' => 0,
+                    'revenue' => 0.00
+                ];
+            }
+            $product_stats[$p_id]['units_sold'] += $qty;
+            $product_stats[$p_id]['revenue'] += $revenue;
+        }
+
+        // Sort products by units_sold descending
+        uasort($product_stats, function($a, $b) {
+            return $b['units_sold'] <=> $a['units_sold'];
+        });
+
+        $top_products_raw = array_slice($product_stats, 0, 5);
+
+        // Find max revenue among top selling products for performance progress bar
+        $max_p_revenue = 0.00;
+        foreach ($top_products_raw as $p) {
+            if ($p['revenue'] > $max_p_revenue) {
+                $max_p_revenue = $p['revenue'];
+            }
+        }
+
+        $top_selling_products = [];
+        $rank = 1;
+        foreach ($top_products_raw as $p) {
+            $performance = $max_p_revenue > 0 ? round(($p['revenue'] / $max_p_revenue) * 100) : 0;
+            $top_selling_products[] = [
+                'rank' => $rank++,
+                'product' => $p['product_name'],
+                'units_sold' => $p['units_sold'],
+                'revenue' => $p['revenue'],
+                'performance' => (int)$performance
+            ];
+        }
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Report retrieved successfully',
+                'data' => [
+                    'metrics' => [
+                        'total_orders' => $total_orders,
+                        'total_sales' => $total_sales,
+                        'avg_order_value' => $avg_order_value
+                    ],
+                    'sales_report' => $chart_data,
+                    'category_distribution' => $category_distribution,
+                    'top_selling_products' => $top_selling_products
+                ]
+            ]));
+    }
+
     private function restore_stock_for_order(int $order_id, int $vendor_id): void
     {
         $items = $this->db
@@ -2885,5 +3266,407 @@ class Api extends CI_Controller
                 ->where('id', $item->product_id)
                 ->update('vendor_products');
         }
+    }
+
+    public function order_invoice($order_id)
+    {
+        $order_id = intval($order_id);
+        if ($order_id <= 0) {
+            show_404();
+            return;
+        }
+
+        $dir = FCPATH . 'assets/uploads/invoices/';
+        $filepath = $dir . 'invoice_' . $order_id . '.pdf';
+
+        if (!file_exists($filepath)) {
+            $this->generate_order_invoice_file($order_id);
+        }
+
+        if (!file_exists($filepath)) {
+            show_404();
+            return;
+        }
+
+        $order = $this->db->get_where('orders', ['id' => $order_id])->row();
+        $order_number = $order ? ($order->order_number ?: ('ORD-' . $order->id)) : ('ORD-' . $order_id);
+
+        $disposition = $this->input->get('download') ? 'attachment' : 'inline';
+        $filesize = filesize($filepath);
+
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: ' . $disposition . '; filename="Invoice_' . $order_number . '.pdf"');
+        header('Content-Length: ' . $filesize);
+        header('Cache-Control: private, max-age=0, must-revalidate');
+        header('Pragma: public');
+
+        readfile($filepath);
+        exit;
+    }
+
+    public function generate_order_invoice_file($order_id, $vendor_id = null)
+    {
+        $dir = FCPATH . 'assets/uploads/invoices/';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+
+        $pdf_content = $this->generate_order_invoice_pdf($order_id, $vendor_id);
+        if (!$pdf_content) {
+            return false;
+        }
+
+        $filename = 'invoice_' . $order_id . '.pdf';
+        $filepath = $dir . $filename;
+        @file_put_contents($filepath, $pdf_content);
+        return 'assets/uploads/invoices/' . $filename;
+    }
+
+    public function generate_order_invoice_pdf($order_id, $vendor_id = null)
+    {
+        $html = $this->generate_order_invoice_html($order_id, $vendor_id);
+        if (!$html) {
+            return null;
+        }
+
+        try {
+            if (!class_exists('Dompdf\Dompdf')) {
+                $autoload = FCPATH . 'vendor/autoload.php';
+                if (file_exists($autoload)) {
+                    require_once $autoload;
+                }
+            }
+
+            $options = new \Dompdf\Options();
+            $options->set('isHtml5ParserEnabled', true);
+            $options->set('isRemoteEnabled', true);
+            $options->set('defaultFont', 'DejaVu Sans');
+
+            $dompdf = new \Dompdf\Dompdf($options);
+            $dompdf->loadHtml($html);
+            $dompdf->setPaper('A4', 'portrait');
+            $dompdf->render();
+            return $dompdf->output();
+        } catch (\Exception $e) {
+            log_message('error', 'Dompdf generation error: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    public function generate_order_invoice_html($order_id, $vendor_id = null)
+    {
+        $order = $this->db->get_where('orders', ['id' => $order_id])->row();
+        if (!$order) {
+            return null;
+        }
+
+        $customer = $this->db->get_where('users', ['id' => $order->user_id])->row();
+        $address = $this->db->get_where('user_addresses', ['id' => $order->address_id])->row();
+
+        $this->db->where('order_id', $order_id);
+        if ($vendor_id) {
+            $this->db->where('vendor_id', $vendor_id);
+        }
+        $items = $this->db->get('order_items')->result();
+        if (empty($items)) {
+            $items = $this->db->where('order_id', $order_id)->get('order_items')->result();
+        }
+        if (empty($items)) {
+            return null;
+        }
+
+        $actual_vendor_id = $vendor_id ?: ($items[0]->vendor_id ?? 0);
+        $vendor = $this->db->get_where('users', ['id' => $actual_vendor_id])->row();
+
+        $subtotal = 0.00;
+        $items_rows = '';
+        $idx = 1;
+        foreach ($items as $item) {
+            $line_total = ($item->price * $item->quantity);
+            $subtotal += $line_total;
+            $p_name = htmlspecialchars($item->product_name);
+            $p_qty = (int)$item->quantity;
+            $p_price = number_format((float)$item->price, 2);
+            $p_line = number_format((float)$line_total, 2);
+            $bg = ($idx % 2 === 0) ? '#fbfcfe' : '#ffffff';
+
+            $items_rows .= "
+                <tr style='background-color: {$bg};'>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #64748b;'>{$idx}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #00204E;'>{$p_name}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #334155;'>{$p_qty}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;'>&#8377; {$p_price}</td>
+                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold; color: #34A129;'>&#8377; {$p_line}</td>
+                </tr>
+            ";
+            $idx++;
+        }
+
+        $is_urgent = (isset($order->delivery_type) && strtolower($order->delivery_type) === 'urgent');
+        $urgent_charge = $is_urgent ? 50.00 : 0.00;
+        $delivery_charge = floatval($order->delivery_charge ?? 0.00);
+        $base_delivery_charge = ($is_urgent && $delivery_charge >= 50) ? ($delivery_charge - 50.00) : $delivery_charge;
+        $grand_total = floatval($order->total_amount ?? ($subtotal + $delivery_charge));
+
+        $order_number = htmlspecialchars($order->order_number ?? ('ORD-' . $order->id));
+        $date_str = date('d M Y, h:i A', strtotime($order->created_at ?: ($order->created_on ?: 'now')));
+
+        $vendor_name = htmlspecialchars($vendor->store_name ?? ($vendor->name ?? 'Recomm Vendor Store'));
+        $vendor_owner = htmlspecialchars($vendor->owner_name ?? ($vendor->name ?? 'Store Owner'));
+        $vendor_phone = htmlspecialchars($vendor->mobile ?? ($vendor->contact_number ?? ''));
+        $vendor_addr = htmlspecialchars($vendor->address ?? 'Store Address');
+        $vendor_pin = htmlspecialchars($vendor->pincode ?? '');
+
+        $cust_name = htmlspecialchars($address->full_name ?? ($customer->name ?? 'Valued Customer'));
+        $cust_phone = htmlspecialchars($address->mobile ?? ($customer->mobile ?? ''));
+        $cust_addr = $address ? htmlspecialchars("{$address->address_line1}, {$address->city} - {$address->pincode}") : 'Customer Delivery Address';
+
+        $pay_method = strtoupper(htmlspecialchars($order->payment_method ?? 'COD'));
+        $pay_status = strtoupper(htmlspecialchars($order->payment_status ?? 'PENDING'));
+        $del_mode = ($order->delivery_option === 'self') ? 'By Self' : 'Delivery Partner';
+        $distance_km = $order->distance ? floatval($order->distance) . ' KM' : '';
+
+        $urgent_badge = $is_urgent
+            ? '<span style="background-color:#fef2f2; color:#dc2626; border:1px solid #fecaca; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">⚡ URGENT DELIVERY</span>'
+            : '<span style="background-color:#f0fdf4; color:#166534; border:1px solid #bbf7d0; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">STANDARD DELIVERY</span>';
+
+        $urgent_row = $is_urgent ? "
+            <tr>
+                <td style='padding: 5px 6px; color: #dc2626; font-weight: bold;'>⚡ Urgent Delivery Surcharge:</td>
+                <td style='padding: 5px 6px; text-align: right; color: #dc2626; font-weight: bold;'>+ &#8377; " . number_format($urgent_charge, 2) . "</td>
+            </tr>" : "";
+
+        $base_delivery_row = $base_delivery_charge > 0 ? "
+            <tr>
+                <td style='padding: 5px 6px; color: #64748b;'>Delivery Charge" . ($distance_km ? " ({$distance_km})" : "") . ":</td>
+                <td style='padding: 5px 6px; text-align: right; color: #334155; font-weight: bold;'>+ &#8377; " . number_format($base_delivery_charge, 2) . "</td>
+            </tr>" : "";
+
+        $subtotal_fmt = number_format($subtotal, 2);
+        $total_fmt = number_format($grand_total, 2);
+
+        return '<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<title>Invoice - ' . $order_number . '</title>
+<style>
+    @page {
+        margin: 12mm 15mm;
+        size: A4 portrait;
+    }
+    body {
+        font-family: "DejaVu Sans", sans-serif;
+        font-size: 11px;
+        color: #1e293b;
+        margin: 0;
+        padding: 0;
+        line-height: 1.4;
+    }
+    .top-bar {
+        height: 6px;
+        background-color: #00204E;
+        margin-bottom: 16px;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .header-table td {
+        vertical-align: top;
+    }
+    .brand-title {
+        font-size: 24px;
+        font-weight: bold;
+        color: #00204E;
+        letter-spacing: -0.5px;
+    }
+    .brand-sub {
+        font-size: 10px;
+        font-weight: bold;
+        color: #34A129;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 2px;
+    }
+    .invoice-title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #00204E;
+        text-align: right;
+    }
+    .invoice-num {
+        font-size: 13px;
+        font-weight: bold;
+        color: #34A129;
+        text-align: right;
+        margin-top: 2px;
+    }
+    .invoice-date {
+        font-size: 11px;
+        color: #64748b;
+        text-align: right;
+        margin-top: 3px;
+    }
+    .section-divider {
+        border-bottom: 1.5px solid #e2e8f0;
+        margin: 14px 0;
+    }
+    .parties-table {
+        margin-bottom: 14px;
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+    }
+    .parties-table td {
+        width: 50%;
+        padding: 12px 14px;
+        vertical-align: top;
+    }
+    .party-heading {
+        font-size: 10px;
+        font-weight: bold;
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+    }
+    .party-name {
+        font-size: 13px;
+        font-weight: bold;
+        color: #00204E;
+        margin-bottom: 3px;
+    }
+    .party-info {
+        font-size: 11px;
+        color: #475569;
+        line-height: 1.4;
+    }
+    .meta-table {
+        background-color: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 16px;
+    }
+    .meta-table td {
+        padding: 8px 12px;
+        font-size: 11px;
+    }
+    .items-table {
+        margin-bottom: 16px;
+    }
+    .items-table th {
+        background-color: #00204E;
+        color: #ffffff;
+        font-size: 10px;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 8px 10px;
+        text-align: left;
+    }
+    .totals-table {
+        width: 320px;
+        margin-left: auto;
+    }
+    .totals-table td {
+        padding: 4px 6px;
+        font-size: 11px;
+    }
+    .grand-total-row td {
+        border-top: 2px solid #00204E;
+        border-bottom: 2px solid #00204E;
+        font-size: 14px;
+        font-weight: bold;
+        color: #00204E;
+        padding: 8px 6px;
+    }
+    .footer {
+        margin-top: 26px;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 12px;
+        text-align: center;
+        font-size: 10px;
+        color: #64748b;
+    }
+</style>
+</head>
+<body>
+    <div class="top-bar"></div>
+
+    <table class="header-table">
+        <tr>
+            <td style="width: 55%;">
+                <div class="brand-title">RECOMM</div>
+                <div class="brand-sub">Smart Store & Quick Delivery</div>
+            </td>
+            <td style="width: 45%;">
+                <div class="invoice-title">TAX INVOICE</div>
+                <div class="invoice-num">#' . $order_number . '</div>
+                <div class="invoice-date">Date: ' . $date_str . '</div>
+            </td>
+        </tr>
+    </table>
+
+    <div class="section-divider"></div>
+
+    <table class="parties-table">
+        <tr>
+            <td>
+                <div class="party-heading">Sold By (Vendor)</div>
+                <div class="party-name">' . $vendor_name . '</div>'
+                . ($vendor_owner ? '<div class="party-info">Owner: ' . $vendor_owner . '</div>' : '')
+                . ($vendor_phone ? '<div class="party-info">Mobile: ' . $vendor_phone . '</div>' : '')
+                . '<div class="party-info">' . $vendor_addr . ($vendor_pin ? ' - ' . $vendor_pin : '') . '</div>
+            </td>
+            <td style="border-left: 1px solid #e2e8f0;">
+                <div class="party-heading">Billed & Delivered To</div>
+                <div class="party-name">' . $cust_name . '</div>'
+                . ($cust_phone ? '<div class="party-info">Mobile: ' . $cust_phone . '</div>' : '')
+                . '<div class="party-info">' . $cust_addr . '</div>
+            </td>
+        </tr>
+    </table>
+
+    <table class="meta-table">
+        <tr>
+            <td><strong>Payment:</strong> ' . $pay_method . ' (' . $pay_status . ')</td>
+            <td><strong>Mode:</strong> ' . $del_mode . ($distance_km ? ' (' . $distance_km . ')' : '') . '</td>
+            <td><strong>Type:</strong> ' . $urgent_badge . '</td>
+        </tr>
+    </table>
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width: 8%; text-align: center;">#</th>
+                <th style="width: 48%;">Item Description</th>
+                <th style="width: 12%; text-align: center;">Qty</th>
+                <th style="width: 16%; text-align: right;">Price</th>
+                <th style="width: 16%; text-align: right;">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            ' . $items_rows . '
+        </tbody>
+    </table>
+
+    <table class="totals-table">
+        <tr>
+            <td style="color: #64748b; padding: 5px 6px;">Items Subtotal:</td>
+            <td style="text-align: right; font-weight: bold; padding: 5px 6px;">&#8377; ' . $subtotal_fmt . '</td>
+        </tr>
+        ' . $base_delivery_row . '
+        ' . $urgent_row . '
+        <tr class="grand-total-row">
+            <td>Grand Total:</td>
+            <td style="text-align: right; color: #34A129;">&#8377; ' . $total_fmt . '</td>
+        </tr>
+    </table>
+
+    <div class="footer">
+        <p style="font-weight: bold; color: #00204E; margin: 0 0 4px;">Thank you for shopping with Recomm!</p>
+        <p style="margin: 0;">This is a computer-generated tax invoice and does not require a physical signature.</p>
+    </div>
+</body>
+</html>';
     }
 }
