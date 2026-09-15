@@ -590,7 +590,7 @@
                 </div>
 
                 <div class="row">
-                    <div class="col-md-6 rc-form-group">
+                    <div class="col-md-5 rc-form-group">
                         <label for="category_id" class="rc-form-label">Category <span class="req">*</span></label>
                         <select class="rc-form-control form-select" id="category_id" name="category_id" required>
                             <option value="">Select Category</option>
@@ -604,8 +604,14 @@
                         <?= form_error('category_id', '<small class="text-danger mt-1 d-block">', '</small>') ?>
                     </div>
 
-                    <div class="col-md-6 rc-form-group">
-                        <label for="sku" class="rc-form-label">SKU</label>
+                    <div class="col-md-4 rc-form-group">
+                        <label for="brand" class="rc-form-label">Brand</label>
+                        <input type="text" class="rc-form-control" id="brand" name="brand"
+                            value="<?= set_value('brand', $product->brand ?? '') ?>" placeholder="e.g. FarmFresh, Fortune">
+                    </div>
+
+                    <div class="col-md-3 rc-form-group">
+                        <label for="sku" class="rc-form-label">Base SKU</label>
                         <input type="text" class="rc-form-control" id="sku" name="sku"
                             value="<?= set_value('sku', $product->sku) ?>">
                     </div>
@@ -669,6 +675,66 @@
                     <div class="rc-upload-hint">Selecting new files replaces the gallery. You can select multiple images.</div>
 
                     <div id="galleryPreview" class="rc-gallery-grid mt-3"></div>
+                </div>
+            </div>
+
+            <!-- Master Product Variants / Pack Sizes -->
+            <div class="rc-card">
+                <div class="rc-card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="rc-card-icon-box"><i class="fas fa-boxes"></i></div>
+                        <div>
+                            <h3>Variants & Pack Sizes</h3>
+                            <div class="rc-card-sub">Define pack sizes (e.g. 1kg, 5kg, 10kg, 25kg) for vendors to pick from</div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-success" onclick="addVariantRow()">
+                        <i class="fas fa-plus me-1"></i> Add Pack Size / Variant
+                    </button>
+                </div>
+                
+                <div class="table-responsive mt-3">
+                    <table class="table table-bordered table-sm align-middle" id="variantsTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="min-width: 140px;">Pack Size / Variant Name *</th>
+                                <th style="min-width: 120px;">Variant SKU</th>
+                                <th style="min-width: 110px;">Default MRP (₹)</th>
+                                <th style="min-width: 110px;">Default Price (₹)</th>
+                                <th style="width: 50px;" class="text-center">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="variantsTableBody">
+                            <?php if (!empty($variants)): ?>
+                                <?php foreach ($variants as $v): ?>
+                                    <tr id="var_<?= $v->id ?>">
+                                        <td>
+                                            <input type="text" name="variant_names[]" class="form-control form-control-sm" 
+                                                   value="<?= htmlspecialchars($v->variant_name, ENT_QUOTES, 'UTF-8') ?>" placeholder="e.g. 1kg, 5kg, 10kg" required>
+                                        </td>
+                                        <td>
+                                            <input type="text" name="variant_skus[]" class="form-control form-control-sm" 
+                                                   value="<?= htmlspecialchars($v->sku ?? '', ENT_QUOTES, 'UTF-8') ?>" placeholder="e.g. WHT-1KG">
+                                        </td>
+                                        <td>
+                                            <input type="number" step="0.01" min="0" name="variant_mrps[]" class="form-control form-control-sm" 
+                                                   value="<?= $v->mrp !== null ? $v->mrp : '' ?>" placeholder="0.00">
+                                        </td>
+                                        <td>
+                                            <input type="number" step="0.01" min="0" name="variant_prices[]" class="form-control form-control-sm" 
+                                                   value="<?= $v->price !== null ? $v->price : '' ?>" placeholder="0.00">
+                                        </td>
+                                        <td class="text-center">
+                                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="document.getElementById('var_<?= $v->id ?>').remove()" title="Remove variant">
+                                                <i class="fas fa-trash-alt"></i>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                    <small class="text-muted">Vendors pick one of these pack sizes and enter their store price and available stock.</small>
                 </div>
             </div>
 
@@ -799,5 +865,36 @@
                 reader.readAsDataURL(input.files[i]);
             }
         }
+    }
+
+    // Dynamic Variant Management
+    function addVariantRow(name = '', sku = '', mrp = '', price = '') {
+        const rowId = 'var_' + Math.random().toString(36).substr(2, 9);
+        const html = `
+            <tr id="${rowId}">
+                <td>
+                    <input type="text" name="variant_names[]" class="form-control form-control-sm" 
+                           value="${name}" placeholder="e.g. 1kg, 5kg, 10kg, 25kg" required>
+                </td>
+                <td>
+                    <input type="text" name="variant_skus[]" class="form-control form-control-sm" 
+                           value="${sku}" placeholder="e.g. WHT-1KG">
+                </td>
+                <td>
+                    <input type="number" step="0.01" min="0" name="variant_mrps[]" class="form-control form-control-sm" 
+                           value="${mrp}" placeholder="0.00">
+                </td>
+                <td>
+                    <input type="number" step="0.01" min="0" name="variant_prices[]" class="form-control form-control-sm" 
+                           value="${price}" placeholder="0.00">
+                </td>
+                <td class="text-center">
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="document.getElementById('${rowId}').remove()" title="Remove variant">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+        document.getElementById('variantsTableBody').insertAdjacentHTML('beforeend', html);
     }
 </script>

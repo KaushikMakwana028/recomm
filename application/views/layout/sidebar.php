@@ -357,7 +357,7 @@
         <li>
             <a href="<?= base_url('products') ?>" class="<?= $this->uri->segment(1) == 'products' ? 'active' : '' ?>">
                 <i class="fas fa-box"></i>
-                <span>Products</span>
+                <span>Master Catalogue</span>
             </a>
         </li>
         <li>
@@ -367,7 +367,7 @@
             </a>
         </li>
         <li>
-            <a href="<?= base_url('settings') ?>" class="<?= $this->uri->segment(1) == 'settings' ? 'active' : '' ?>">
+            <a href="<?= base_url('settings/delivery') ?>" class="<?= $this->uri->segment(1) == 'settings' ? 'active' : '' ?>">
                 <i class="fas fa-cog"></i>
                 <span>Settings</span>
             </a>

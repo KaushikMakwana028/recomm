@@ -109,8 +109,10 @@ class Orders extends MY_Controller
                 if ($distance_val !== null && $distance_val !== '' && is_numeric($distance_val)) {
                     $distance = floatval($distance_val);
                     $update_fields['distance'] = $distance;
+                    $update_fields['distance_km'] = $distance;
                 } else {
                     $update_fields['distance'] = null;
+                    $update_fields['distance_km'] = null;
                 }
 
                 $update_fields['delivery_type'] = $delivery_type;
@@ -158,6 +160,12 @@ class Orders extends MY_Controller
         }
         if (!$this->db->field_exists('distance', 'orders')) {
             $this->db->query("ALTER TABLE `orders` ADD COLUMN `distance` DECIMAL(10,2) DEFAULT NULL");
+        }
+        if (!$this->db->field_exists('distance_km', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `distance_km` DECIMAL(10,2) DEFAULT NULL");
+        }
+        if (!$this->db->field_exists('distance_method', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `distance_method` VARCHAR(50) DEFAULT 'pure_math'");
         }
         if (!$this->db->field_exists('delivery_type', 'orders')) {
             $this->db->query("ALTER TABLE `orders` ADD COLUMN `delivery_type` VARCHAR(50) DEFAULT 'normal'");

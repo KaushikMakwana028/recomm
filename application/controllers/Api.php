@@ -484,7 +484,7 @@ class Api extends CI_Controller
         }
 
         $user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, latitude, longitude, opening_time, closing_time, is_holiday, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
             ->where('id', $id)
             ->get('users')
             ->row();
@@ -523,9 +523,21 @@ class Api extends CI_Controller
                 'contact_number' => $user->contact_number,
                 'address' => $user->address,
                 'pincode' => $user->pincode,
+                'latitude' => $user->latitude !== null ? (float)$user->latitude : null,
+                'longitude' => $user->longitude !== null ? (float)$user->longitude : null,
                 'opening_time' => $user->opening_time,
                 'closing_time' => $user->closing_time,
                 'is_holiday' => (int)$user->is_holiday,
+                'prep_time_minutes' => isset($user->prep_time_minutes) ? (int)$user->prep_time_minutes : 30,
+                'lunch_window_start' => !empty($user->lunch_window_start) ? $user->lunch_window_start : '12:00:00',
+                'lunch_window_end' => !empty($user->lunch_window_end) ? $user->lunch_window_end : '14:00:00',
+                'dinner_window_start' => !empty($user->dinner_window_start) ? $user->dinner_window_start : '19:00:00',
+                'dinner_window_end' => !empty($user->dinner_window_end) ? $user->dinner_window_end : '21:00:00',
+                'slot_immediately_enabled' => isset($user->slot_immediately_enabled) ? (int)$user->slot_immediately_enabled : 1,
+                'slot_later_enabled' => isset($user->slot_later_enabled) ? (int)$user->slot_later_enabled : 1,
+                'slot_lunch_enabled' => isset($user->slot_lunch_enabled) ? (int)$user->slot_lunch_enabled : 1,
+                'slot_dinner_enabled' => isset($user->slot_dinner_enabled) ? (int)$user->slot_dinner_enabled : 1,
+                'slot_custom_enabled' => isset($user->slot_custom_enabled) ? (int)$user->slot_custom_enabled : 1,
                 'profile_image' => !empty($user->profile_image) ? base_url($user->profile_image) : null,
                 'store_photo' => !empty($user->store_photo) ? base_url($user->store_photo) : null,
                 'role' => $user->role,
@@ -641,6 +653,57 @@ class Api extends CI_Controller
         if ($this->input->post('is_holiday') !== null) {
             $val = $this->input->post('is_holiday');
             $update_data['is_holiday'] = in_array(strtolower((string)$val), ['1', 'true', 'yes', 'on'], true) ? 1 : 0;
+        }
+
+        $input_json = json_decode($this->input->raw_input_stream, true) ?: [];
+        $lat_val = $this->input->post('latitude') !== null ? $this->input->post('latitude') : ($input_json['latitude'] ?? null);
+        $lon_val = $this->input->post('longitude') !== null ? $this->input->post('longitude') : ($input_json['longitude'] ?? null);
+
+        if ($lat_val !== null && $lat_val !== '') {
+            $update_data['latitude'] = is_numeric($lat_val) ? floatval($lat_val) : null;
+        }
+        if ($lon_val !== null && $lon_val !== '') {
+            $update_data['longitude'] = is_numeric($lon_val) ? floatval($lon_val) : null;
+        }
+
+        // Preparation time and delivery window settings
+        $prep_val = $this->input->post('prep_time_minutes') !== null ? $this->input->post('prep_time_minutes') : ($input_json['prep_time_minutes'] ?? null);
+        if ($prep_val !== null && $prep_val !== '' && is_numeric($prep_val)) {
+            $update_data['prep_time_minutes'] = max(5, min(480, (int)$prep_val));
+        }
+
+        $lunch_start = $this->input->post('lunch_window_start') !== null ? $this->input->post('lunch_window_start') : ($input_json['lunch_window_start'] ?? null);
+        if ($lunch_start !== null && $lunch_start !== '') {
+            $update_data['lunch_window_start'] = strlen(trim($lunch_start)) == 5 ? trim($lunch_start) . ':00' : trim($lunch_start);
+        }
+
+        $lunch_end = $this->input->post('lunch_window_end') !== null ? $this->input->post('lunch_window_end') : ($input_json['lunch_window_end'] ?? null);
+        if ($lunch_end !== null && $lunch_end !== '') {
+            $update_data['lunch_window_end'] = strlen(trim($lunch_end)) == 5 ? trim($lunch_end) . ':00' : trim($lunch_end);
+        }
+
+        $dinner_start = $this->input->post('dinner_window_start') !== null ? $this->input->post('dinner_window_start') : ($input_json['dinner_window_start'] ?? null);
+        if ($dinner_start !== null && $dinner_start !== '') {
+            $update_data['dinner_window_start'] = strlen(trim($dinner_start)) == 5 ? trim($dinner_start) . ':00' : trim($dinner_start);
+        }
+
+        $dinner_end = $this->input->post('dinner_window_end') !== null ? $this->input->post('dinner_window_end') : ($input_json['dinner_window_end'] ?? null);
+        if ($dinner_end !== null && $dinner_end !== '') {
+            $update_data['dinner_window_end'] = strlen(trim($dinner_end)) == 5 ? trim($dinner_end) . ':00' : trim($dinner_end);
+        }
+
+        $slot_fields = [
+            'slot_immediately_enabled',
+            'slot_later_enabled',
+            'slot_lunch_enabled',
+            'slot_dinner_enabled',
+            'slot_custom_enabled'
+        ];
+        foreach ($slot_fields as $sf) {
+            $s_val = $this->input->post($sf) !== null ? $this->input->post($sf) : ($input_json[$sf] ?? null);
+            if ($s_val !== null && $s_val !== '') {
+                $update_data[$sf] = in_array(strtolower((string)$s_val), ['1', 'true', 'yes', 'on'], true) ? 1 : 0;
+            }
         }
 
         // Bank detail fields
@@ -767,7 +830,7 @@ class Api extends CI_Controller
 
         // Get updated user
         $updated_user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, opening_time, closing_time, is_holiday, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, latitude, longitude, opening_time, closing_time, is_holiday, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
             ->where('id', $user_id)
             ->get('users')
             ->row();
@@ -790,9 +853,21 @@ class Api extends CI_Controller
                     'contact_number' => $updated_user->contact_number,
                     'address' => $updated_user->address,
                     'pincode' => $updated_user->pincode,
+                    'latitude' => $updated_user->latitude !== null ? (float)$updated_user->latitude : null,
+                    'longitude' => $updated_user->longitude !== null ? (float)$updated_user->longitude : null,
                     'opening_time' => $updated_user->opening_time,
                     'closing_time' => $updated_user->closing_time,
                     'is_holiday' => (int)$updated_user->is_holiday,
+                    'prep_time_minutes' => isset($updated_user->prep_time_minutes) ? (int)$updated_user->prep_time_minutes : 30,
+                    'lunch_window_start' => !empty($updated_user->lunch_window_start) ? $updated_user->lunch_window_start : '12:00:00',
+                    'lunch_window_end' => !empty($updated_user->lunch_window_end) ? $updated_user->lunch_window_end : '14:00:00',
+                    'dinner_window_start' => !empty($updated_user->dinner_window_start) ? $updated_user->dinner_window_start : '19:00:00',
+                    'dinner_window_end' => !empty($updated_user->dinner_window_end) ? $updated_user->dinner_window_end : '21:00:00',
+                    'slot_immediately_enabled' => isset($updated_user->slot_immediately_enabled) ? (int)$updated_user->slot_immediately_enabled : 1,
+                    'slot_later_enabled' => isset($updated_user->slot_later_enabled) ? (int)$updated_user->slot_later_enabled : 1,
+                    'slot_lunch_enabled' => isset($updated_user->slot_lunch_enabled) ? (int)$updated_user->slot_lunch_enabled : 1,
+                    'slot_dinner_enabled' => isset($updated_user->slot_dinner_enabled) ? (int)$updated_user->slot_dinner_enabled : 1,
+                    'slot_custom_enabled' => isset($updated_user->slot_custom_enabled) ? (int)$updated_user->slot_custom_enabled : 1,
                     'profile_image' => $updated_user->profile_image ? base_url($updated_user->profile_image) : null,
                     'store_photo' => $updated_user->store_photo ? base_url($updated_user->store_photo) : null,
                     'role' => $updated_user->role,
@@ -2549,7 +2624,14 @@ class Api extends CI_Controller
                 'delivery_option' => $order->delivery_option,
                 'delivery_charge' => (float)$order->delivery_charge,
                 'distance' => $order->distance ? (float)$order->distance : null,
+                'distance_km' => isset($order->distance_km) ? (float)$order->distance_km : ($order->distance ? (float)$order->distance : null),
+                'distance_method' => $order->distance_method ?? 'pure_math',
                 'delivery_type' => $order->delivery_type ?? 'normal',
+                'chosen_time_option' => $order->chosen_time_option ?? 'immediately',
+                'estimated_window_start' => $order->estimated_window_start ?? null,
+                'estimated_window_end' => $order->estimated_window_end ?? null,
+                'estimated_window_formatted' => function_exists('format_slot_window_display') ? format_slot_window_display($order->chosen_time_option ?? 'immediately', $order->estimated_window_start ?? null, $order->estimated_window_end ?? null) : ($order->chosen_time_option ?? 'immediately'),
+                'custom_delivery_time' => $order->custom_delivery_time ?? null,
                 'created_at' => $order->created_at,
                 'customer_name' => $order->customer_name ?? 'Unknown',
                 'customer_mobile' => $order->customer_mobile ?? '',
@@ -3445,6 +3527,21 @@ class Api extends CI_Controller
         $subtotal_fmt = number_format($subtotal, 2);
         $total_fmt = number_format($grand_total, 2);
 
+        $chosen_slot_opt = $order->chosen_time_option ?? 'immediately';
+        $slot_label = ucfirst($chosen_slot_opt);
+        if ($chosen_slot_opt === 'later') $slot_label = 'Later (3–4 hrs)';
+        if ($chosen_slot_opt === 'immediately') $slot_label = 'Immediately';
+        if ($chosen_slot_opt === 'lunch') $slot_label = 'Lunch Window';
+        if ($chosen_slot_opt === 'dinner') $slot_label = 'Dinner Window';
+        if ($chosen_slot_opt === 'custom') $slot_label = 'Custom Scheduled';
+
+        $window_display = '';
+        if (!empty($order->estimated_window_start) && !empty($order->estimated_window_end)) {
+            $window_display = function_exists('format_slot_window_display')
+                ? format_slot_window_display($order->estimated_window_start, $order->estimated_window_end, strtotime($order->created_at ?: 'now'))
+                : (date('d M, h:i A', strtotime($order->estimated_window_start)) . ' – ' . date('h:i A', strtotime($order->estimated_window_end)));
+        }
+
         return '<!DOCTYPE html>
 <html>
 <head>
@@ -3632,6 +3729,12 @@ class Api extends CI_Controller
             <td><strong>Mode:</strong> ' . $del_mode . ($distance_km ? ' (' . $distance_km . ')' : '') . '</td>
             <td><strong>Type:</strong> ' . $urgent_badge . '</td>
         </tr>
+        <tr>
+            <td colspan="3" style="border-top: 1px dashed #cbd5e1; padding-top: 6px;">
+                <strong>Delivery Time Slot:</strong> <span style="color: #00204E; font-weight: bold;">' . htmlspecialchars($slot_label) . '</span>'
+                . ($window_display ? ' &nbsp;|&nbsp; <strong>Est. Delivery Window:</strong> <span style="color: #34A129; font-weight: bold;">' . htmlspecialchars($window_display) . '</span>' : '')
+            . '</td>
+        </tr>
     </table>
 
     <table class="items-table">
@@ -3656,6 +3759,10 @@ class Api extends CI_Controller
         </tr>
         ' . $base_delivery_row . '
         ' . $urgent_row . '
+        <tr>
+            <td style="color: #64748b; padding: 5px 6px; font-size: 10px;">Time Slot & Window:</td>
+            <td style="text-align: right; color: #00204E; font-weight: bold; padding: 5px 6px; font-size: 10px;">' . htmlspecialchars($slot_label) . ($window_display ? '<br><span style="color: #34A129; font-size: 9px; font-weight: normal;">' . htmlspecialchars($window_display) . '</span>' : '') . '</td>
+        </tr>
         <tr class="grand-total-row">
             <td>Grand Total:</td>
             <td style="text-align: right; color: #34A129;">&#8377; ' . $total_fmt . '</td>

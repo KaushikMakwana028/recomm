@@ -94,6 +94,7 @@ $route['orders/update-status'] = 'orders/update_status';
 
 // Settings
 $route['settings/profile'] = 'profile/index';
+$route['settings/delivery'] = 'settings/index';
 $route['users/login-as-vendor/(:num)'] = 'users/login_as_vendor/$1';
 
 
@@ -172,6 +173,7 @@ $route['api/user/delete_address'] = 'user/api/delete_address';
 
 // Order API Routes
 $route['api/user/place_order'] = 'user/api/place_order';
+$route['api/user/calculate_delivery_charge'] = 'user/api/calculate_delivery_charge';
 $route['api/user/verify_order_payment'] = 'user/api/verify_order_payment';
 $route['api/user/get_orders'] = 'user/api/get_orders';
 $route['api/user/get_order_details'] = 'user/api/get_order_details';

@@ -87,6 +87,16 @@ class Products extends MY_Controller
             ';
         }
 
+        // Fetch variants for all loaded products
+        $product_ids = array_map(function($p) { return (int)$p->id; }, $products);
+        $variants_by_product = [];
+        if (!empty($product_ids)) {
+            $vars = $this->db->where_in('product_id', $product_ids)->order_by('id', 'ASC')->get('product_variants')->result();
+            foreach ($vars as $v) {
+                $variants_by_product[$v->product_id][] = $v;
+            }
+        }
+
         $html = '';
         foreach ($products as $index => $product) {
 
@@ -122,6 +132,17 @@ class Products extends MY_Controller
                 $price_html .= '<br><small class="text-success">Sale: ₹' . number_format($product->sale_price, 2) . '</small>';
             }
 
+            // Brand & Variants
+            $brand_html = !empty($product->brand) ? '<small class="text-primary d-block fw-semibold"><i class="fas fa-tag me-1"></i>' . htmlspecialchars($product->brand, ENT_QUOTES, 'UTF-8') . '</small>' : '';
+            $variants_html = '';
+            if (!empty($variants_by_product[$product->id])) {
+                $variants_html .= '<div class="mt-1 d-flex flex-wrap gap-1">';
+                foreach ($variants_by_product[$product->id] as $v) {
+                    $variants_html .= '<span class="badge bg-light text-dark border" style="font-size: 0.72rem;">' . htmlspecialchars($v->variant_name, ENT_QUOTES, 'UTF-8') . '</span>';
+                }
+                $variants_html .= '</div>';
+            }
+
             // Status toggle
             $checked = $product->is_active == 1 ? 'checked' : '';
 
@@ -131,8 +152,9 @@ class Products extends MY_Controller
                     <td>' . $image_html . '</td>
                     <td>
                         <strong>' . htmlspecialchars($product->name, ENT_QUOTES, 'UTF-8') . '</strong>
-                        <br>
-                        <small class="text-muted">
+                        ' . $brand_html . '
+                        ' . $variants_html . '
+                        <small class="text-muted d-block mt-1">
                             SKU: ' . htmlspecialchars($product->sku ?: 'N/A', ENT_QUOTES, 'UTF-8') . '
                         </small>
                     </td>
@@ -281,6 +303,7 @@ class Products extends MY_Controller
                 $data = [
                     'category_id' => $this->post('category_id'),
                     'name' => $this->post('name'),
+                    'brand' => $this->post('brand') ?: NULL,
                     'slug' => $slug,
                     'description' => $this->post('description'),
                     'price' => $this->post('price'),
@@ -294,7 +317,30 @@ class Products extends MY_Controller
                 ];
 
                 if ($this->gm->insert('products', $data)) {
-                    $this->setMessage('success', 'Product added successfully');
+                    $product_id = $this->db->insert_id();
+
+                    // Save variants / pack sizes
+                    $variant_names = (array) $this->input->post('variant_names');
+                    $variant_skus = (array) $this->input->post('variant_skus');
+                    $variant_mrps = (array) $this->input->post('variant_mrps');
+                    $variant_prices = (array) $this->input->post('variant_prices');
+
+                    foreach ($variant_names as $idx => $vname) {
+                        $vname = trim($vname);
+                        if (!empty($vname)) {
+                            $this->db->insert('product_variants', [
+                                'product_id'   => $product_id,
+                                'variant_name' => $vname,
+                                'sku'          => trim($variant_skus[$idx] ?? '') ?: null,
+                                'mrp'          => isset($variant_mrps[$idx]) && is_numeric($variant_mrps[$idx]) ? floatval($variant_mrps[$idx]) : null,
+                                'price'        => isset($variant_prices[$idx]) && is_numeric($variant_prices[$idx]) ? floatval($variant_prices[$idx]) : null,
+                                'is_active'    => 1,
+                                'created_at'   => date('Y-m-d H:i:s')
+                            ]);
+                        }
+                    }
+
+                    $this->setMessage('success', 'Product and variants added successfully');
                     redirect('products');
                 } else {
                     $this->setMessage('danger', 'Failed to add product');
@@ -327,6 +373,7 @@ class Products extends MY_Controller
                 $update_data = [
                     'category_id' => $this->post('category_id'),
                     'name' => $this->post('name'),
+                    'brand' => $this->post('brand') ?: NULL,
                     'description' => $this->post('description'),
                     'price' => $this->post('price'),
                     'sale_price' => $this->post('sale_price') ?: NULL,
@@ -364,7 +411,30 @@ class Products extends MY_Controller
                 }
 
                 if ($this->gm->update('products', $update_data, ['id' => $id])) {
-                    $this->setMessage('success', 'Product updated successfully');
+                    // Sync variants
+                    $this->db->where('product_id', $id)->delete('product_variants');
+
+                    $variant_names = (array) $this->input->post('variant_names');
+                    $variant_skus = (array) $this->input->post('variant_skus');
+                    $variant_mrps = (array) $this->input->post('variant_mrps');
+                    $variant_prices = (array) $this->input->post('variant_prices');
+
+                    foreach ($variant_names as $idx => $vname) {
+                        $vname = trim($vname);
+                        if (!empty($vname)) {
+                            $this->db->insert('product_variants', [
+                                'product_id'   => $id,
+                                'variant_name' => $vname,
+                                'sku'          => trim($variant_skus[$idx] ?? '') ?: null,
+                                'mrp'          => isset($variant_mrps[$idx]) && is_numeric($variant_mrps[$idx]) ? floatval($variant_mrps[$idx]) : null,
+                                'price'        => isset($variant_prices[$idx]) && is_numeric($variant_prices[$idx]) ? floatval($variant_prices[$idx]) : null,
+                                'is_active'    => 1,
+                                'created_at'   => date('Y-m-d H:i:s')
+                            ]);
+                        }
+                    }
+
+                    $this->setMessage('success', 'Product and variants updated successfully');
                     redirect('products');
                 } else {
                     $this->setMessage('danger', 'Failed to update product');
@@ -374,6 +444,7 @@ class Products extends MY_Controller
 
         $data['categories'] = $this->gm->getAll('categories', ['is_active' => 1], '*', 'name ASC');
         $data['gallery_images'] = $data['product']->gallery ? json_decode($data['product']->gallery, true) : [];
+        $data['variants'] = $this->db->get_where('product_variants', ['product_id' => $id])->result();
 
         $this->setPageTitle('Edit Product');
         $this->loadView('products/edit', $data);
@@ -407,6 +478,9 @@ class Products extends MY_Controller
                     }
                 }
             }
+
+            // Delete associated variants
+            $this->db->where('product_id', $id)->delete('product_variants');
 
             if ($this->gm->delete('products', ['id' => $id])) {
                 $this->setMessage('success', 'Product deleted successfully');
