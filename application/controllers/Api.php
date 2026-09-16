@@ -3358,10 +3358,25 @@ class Api extends CI_Controller
             return;
         }
 
+        $this->load->helper('invoice');
+
+        // Allow on-screen HTML viewing if ?view=html or ?format=html
+        if ($this->input->get('view') === 'html' || $this->input->get('format') === 'html') {
+            $html = $this->generate_order_invoice_html($order_id);
+            if (!$html) {
+                show_404();
+                return;
+            }
+            $this->output
+                ->set_content_type('text/html')
+                ->set_output($html);
+            return;
+        }
+
         $dir = FCPATH . 'assets/uploads/invoices/';
         $filepath = $dir . 'invoice_' . $order_id . '.pdf';
 
-        if (!file_exists($filepath)) {
+        if ($this->input->get('regenerate') || !file_exists($filepath)) {
             $this->generate_order_invoice_file($order_id);
         }
 
@@ -3437,343 +3452,284 @@ class Api extends CI_Controller
 
     public function generate_order_invoice_html($order_id, $vendor_id = null)
     {
-        $order = $this->db->get_where('orders', ['id' => $order_id])->row();
-        if (!$order) {
-            return null;
+        $this->load->helper('invoice');
+        return render_order_invoice_html($order_id, $vendor_id);
+    }
+
+    /**
+     * Get live published legal page content (Terms, Privacy, Refund)
+     * If no customized version has been published, falls back to the shipped default.
+     *
+     * @param string $slug
+     */
+    public function legal_page($slug = '')
+    {
+        $this->load->helper('legal');
+        $slug = strtolower(trim($slug));
+
+        if (!in_array($slug, get_all_legal_page_slugs())) {
+            return $this->output
+                ->set_status_header(404)
+                ->set_content_type('application/json')
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 404,
+                    'message' => 'Legal page not found.',
+                    'data'    => null,
+                ]));
         }
 
-        $customer = $this->db->get_where('users', ['id' => $order->user_id])->row();
-        $address = $this->db->get_where('user_addresses', ['id' => $order->address_id])->row();
+        $page = resolve_legal_page($slug);
 
-        $this->db->where('order_id', $order_id);
-        if ($vendor_id) {
-            $this->db->where('vendor_id', $vendor_id);
-        }
-        $items = $this->db->get('order_items')->result();
-        if (empty($items)) {
-            $items = $this->db->where('order_id', $order_id)->get('order_items')->result();
-        }
-        if (empty($items)) {
-            return null;
-        }
+        return $this->output
+            ->set_status_header(200)
+            ->set_content_type('application/json')
+            ->set_output(json_encode([
+                'status'  => true,
+                'code'    => 200,
+                'message' => 'Legal page retrieved successfully.',
+                'data'    => [
+                    'slug'         => $page['slug'],
+                    'title'        => $page['title'],
+                    'content'      => $page['content'],
+                    'status'       => $page['status'],
+                    'is_default'   => $page['is_default'],
+                    'published_at' => $page['published_at'],
+                    'updated_at'   => $page['updated_at'],
+                    'last_updated' => $page['updated_at'] ? date('d M Y', strtotime($page['updated_at'])) : date('d M Y'),
+                ],
+            ]));
+    }
 
-        $actual_vendor_id = $vendor_id ?: ($items[0]->vendor_id ?? 0);
-        $vendor = $this->db->get_where('users', ['id' => $actual_vendor_id])->row();
+    /**
+     * Real-time Vendor Dashboard Analytics & Metrics
+     */
+    public function get_vendor_dashboard()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
 
-        $subtotal = 0.00;
-        $items_rows = '';
-        $idx = 1;
-        foreach ($items as $item) {
-            $line_total = ($item->price * $item->quantity);
-            $subtotal += $line_total;
-            $p_name = htmlspecialchars($item->product_name);
-            $p_qty = (int)$item->quantity;
-            $p_price = number_format((float)$item->price, 2);
-            $p_line = number_format((float)$line_total, 2);
-            $bg = ($idx % 2 === 0) ? '#fbfcfe' : '#ffffff';
-
-            $items_rows .= "
-                <tr style='background-color: {$bg};'>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #64748b;'>{$idx}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #00204E;'>{$p_name}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #334155;'>{$p_qty}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;'>&#8377; {$p_price}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold; color: #34A129;'>&#8377; {$p_line}</td>
-                </tr>
-            ";
-            $idx++;
+        // Auth
+        $authHeader = $this->input->get_request_header('Authorization', TRUE);
+        $token = null;
+        if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+            $token = $matches[1];
         }
 
-        $is_urgent = (isset($order->delivery_type) && strtolower($order->delivery_type) === 'urgent');
-        $urgent_charge = $is_urgent ? 50.00 : 0.00;
-        $delivery_charge = floatval($order->delivery_charge ?? 0.00);
-        $base_delivery_charge = ($is_urgent && $delivery_charge >= 50) ? ($delivery_charge - 50.00) : $delivery_charge;
-        $grand_total = floatval($order->total_amount ?? ($subtotal + $delivery_charge));
-
-        $order_number = htmlspecialchars($order->order_number ?? ('ORD-' . $order->id));
-        $date_str = date('d M Y, h:i A', strtotime($order->created_at ?: ($order->created_on ?: 'now')));
-
-        $vendor_name = htmlspecialchars($vendor->store_name ?? ($vendor->name ?? 'Recomm Vendor Store'));
-        $vendor_owner = htmlspecialchars($vendor->owner_name ?? ($vendor->name ?? 'Store Owner'));
-        $vendor_phone = htmlspecialchars($vendor->mobile ?? ($vendor->contact_number ?? ''));
-        $vendor_addr = htmlspecialchars($vendor->address ?? 'Store Address');
-        $vendor_pin = htmlspecialchars($vendor->pincode ?? '');
-
-        $cust_name = htmlspecialchars($address->full_name ?? ($customer->name ?? 'Valued Customer'));
-        $cust_phone = htmlspecialchars($address->mobile ?? ($customer->mobile ?? ''));
-        $cust_addr = $address ? htmlspecialchars("{$address->address_line1}, {$address->city} - {$address->pincode}") : 'Customer Delivery Address';
-
-        $pay_method = strtoupper(htmlspecialchars($order->payment_method ?? 'COD'));
-        $pay_status = strtoupper(htmlspecialchars($order->payment_status ?? 'PENDING'));
-        $del_mode = ($order->delivery_option === 'self') ? 'By Self' : 'Delivery Partner';
-        $distance_km = $order->distance ? floatval($order->distance) . ' KM' : '';
-
-        $urgent_badge = $is_urgent
-            ? '<span style="background-color:#fef2f2; color:#dc2626; border:1px solid #fecaca; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">⚡ URGENT DELIVERY</span>'
-            : '<span style="background-color:#f0fdf4; color:#166534; border:1px solid #bbf7d0; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">STANDARD DELIVERY</span>';
-
-        $urgent_row = $is_urgent ? "
-            <tr>
-                <td style='padding: 5px 6px; color: #dc2626; font-weight: bold;'>⚡ Urgent Delivery Surcharge:</td>
-                <td style='padding: 5px 6px; text-align: right; color: #dc2626; font-weight: bold;'>+ &#8377; " . number_format($urgent_charge, 2) . "</td>
-            </tr>" : "";
-
-        $base_delivery_row = $base_delivery_charge > 0 ? "
-            <tr>
-                <td style='padding: 5px 6px; color: #64748b;'>Delivery Charge" . ($distance_km ? " ({$distance_km})" : "") . ":</td>
-                <td style='padding: 5px 6px; text-align: right; color: #334155; font-weight: bold;'>+ &#8377; " . number_format($base_delivery_charge, 2) . "</td>
-            </tr>" : "";
-
-        $subtotal_fmt = number_format($subtotal, 2);
-        $total_fmt = number_format($grand_total, 2);
-
-        $chosen_slot_opt = $order->chosen_time_option ?? 'immediately';
-        $slot_label = ucfirst($chosen_slot_opt);
-        if ($chosen_slot_opt === 'later') $slot_label = 'Later (3–4 hrs)';
-        if ($chosen_slot_opt === 'immediately') $slot_label = 'Immediately';
-        if ($chosen_slot_opt === 'lunch') $slot_label = 'Lunch Window';
-        if ($chosen_slot_opt === 'dinner') $slot_label = 'Dinner Window';
-        if ($chosen_slot_opt === 'custom') $slot_label = 'Custom Scheduled';
-
-        $window_display = '';
-        if (!empty($order->estimated_window_start) && !empty($order->estimated_window_end)) {
-            $window_display = function_exists('format_slot_window_display')
-                ? format_slot_window_display($order->estimated_window_start, $order->estimated_window_end, strtotime($order->created_at ?: 'now'))
-                : (date('d M, h:i A', strtotime($order->estimated_window_start)) . ' – ' . date('h:i A', strtotime($order->estimated_window_end)));
+        $decoded = $this->verify_jwt($token);
+        if (!$decoded || empty($decoded->data->id)) {
+            return $this->output->set_status_header(401)->set_output(json_encode([
+                'status'  => false,
+                'code'    => 401,
+                'message' => 'Unauthorized',
+                'data'    => null
+            ]));
         }
 
-        return '<!DOCTYPE html>
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-<title>Invoice - ' . $order_number . '</title>
-<style>
-    @page {
-        margin: 12mm 15mm;
-        size: A4 portrait;
-    }
-    body {
-        font-family: "DejaVu Sans", sans-serif;
-        font-size: 11px;
-        color: #1e293b;
-        margin: 0;
-        padding: 0;
-        line-height: 1.4;
-    }
-    .top-bar {
-        height: 6px;
-        background-color: #00204E;
-        margin-bottom: 16px;
-    }
-    table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-    .header-table td {
-        vertical-align: top;
-    }
-    .brand-title {
-        font-size: 24px;
-        font-weight: bold;
-        color: #00204E;
-        letter-spacing: -0.5px;
-    }
-    .brand-sub {
-        font-size: 10px;
-        font-weight: bold;
-        color: #34A129;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-top: 2px;
-    }
-    .invoice-title {
-        font-size: 20px;
-        font-weight: bold;
-        color: #00204E;
-        text-align: right;
-    }
-    .invoice-num {
-        font-size: 13px;
-        font-weight: bold;
-        color: #34A129;
-        text-align: right;
-        margin-top: 2px;
-    }
-    .invoice-date {
-        font-size: 11px;
-        color: #64748b;
-        text-align: right;
-        margin-top: 3px;
-    }
-    .section-divider {
-        border-bottom: 1.5px solid #e2e8f0;
-        margin: 14px 0;
-    }
-    .parties-table {
-        margin-bottom: 14px;
-        background-color: #f8fafc;
-        border: 1px solid #e2e8f0;
-    }
-    .parties-table td {
-        width: 50%;
-        padding: 12px 14px;
-        vertical-align: top;
-    }
-    .party-heading {
-        font-size: 10px;
-        font-weight: bold;
-        color: #94a3b8;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 4px;
-    }
-    .party-name {
-        font-size: 13px;
-        font-weight: bold;
-        color: #00204E;
-        margin-bottom: 3px;
-    }
-    .party-info {
-        font-size: 11px;
-        color: #475569;
-        line-height: 1.4;
-    }
-    .meta-table {
-        background-color: #f1f5f9;
-        border: 1px solid #e2e8f0;
-        margin-bottom: 16px;
-    }
-    .meta-table td {
-        padding: 8px 12px;
-        font-size: 11px;
-    }
-    .items-table {
-        margin-bottom: 16px;
-    }
-    .items-table th {
-        background-color: #00204E;
-        color: #ffffff;
-        font-size: 10px;
-        font-weight: bold;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        padding: 8px 10px;
-        text-align: left;
-    }
-    .totals-table {
-        width: 320px;
-        margin-left: auto;
-    }
-    .totals-table td {
-        padding: 4px 6px;
-        font-size: 11px;
-    }
-    .grand-total-row td {
-        border-top: 2px solid #00204E;
-        border-bottom: 2px solid #00204E;
-        font-size: 14px;
-        font-weight: bold;
-        color: #00204E;
-        padding: 8px 6px;
-    }
-    .footer {
-        margin-top: 26px;
-        border-top: 1px solid #e2e8f0;
-        padding-top: 12px;
-        text-align: center;
-        font-size: 10px;
-        color: #64748b;
-    }
-</style>
-</head>
-<body>
-    <div class="top-bar"></div>
+        $vendor_id = (int)$decoded->data->id;
 
-    <table class="header-table">
-        <tr>
-            <td style="width: 55%;">
-                <div class="brand-title">RECOMM</div>
-                <div class="brand-sub">Smart Store & Quick Delivery</div>
-            </td>
-            <td style="width: 45%;">
-                <div class="invoice-title">TAX INVOICE</div>
-                <div class="invoice-num">#' . $order_number . '</div>
-                <div class="invoice-date">Date: ' . $date_str . '</div>
-            </td>
-        </tr>
-    </table>
+        // 1. Stats - Today orders & sales
+        $today_start = date('Y-m-d 00:00:00');
+        $today_end   = date('Y-m-d 23:59:59');
 
-    <div class="section-divider"></div>
+        $today_res = $this->db->query("
+            SELECT COUNT(DISTINCT o.id) as order_count,
+                   COALESCE(SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)), 0) as total_sales
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            WHERE oi.vendor_id = ?
+              AND o.created_at >= ? AND o.created_at <= ?
+        ", [$vendor_id, $today_start, $today_end])->row();
 
-    <table class="parties-table">
-        <tr>
-            <td>
-                <div class="party-heading">Sold By (Vendor)</div>
-                <div class="party-name">' . $vendor_name . '</div>'
-                . ($vendor_owner ? '<div class="party-info">Owner: ' . $vendor_owner . '</div>' : '')
-                . ($vendor_phone ? '<div class="party-info">Mobile: ' . $vendor_phone . '</div>' : '')
-                . '<div class="party-info">' . $vendor_addr . ($vendor_pin ? ' - ' . $vendor_pin : '') . '</div>
-            </td>
-            <td style="border-left: 1px solid #e2e8f0;">
-                <div class="party-heading">Billed & Delivered To</div>
-                <div class="party-name">' . $cust_name . '</div>'
-                . ($cust_phone ? '<div class="party-info">Mobile: ' . $cust_phone . '</div>' : '')
-                . '<div class="party-info">' . $cust_addr . '</div>
-            </td>
-        </tr>
-    </table>
+        $today_orders = $today_res ? (int)$today_res->order_count : 0;
+        $today_sales  = $today_res ? round((float)$today_res->total_sales, 2) : 0.00;
 
-    <table class="meta-table">
-        <tr>
-            <td><strong>Payment:</strong> ' . $pay_method . ' (' . $pay_status . ')</td>
-            <td><strong>Mode:</strong> ' . $del_mode . ($distance_km ? ' (' . $distance_km . ')' : '') . '</td>
-            <td><strong>Type:</strong> ' . $urgent_badge . '</td>
-        </tr>
-        <tr>
-            <td colspan="3" style="border-top: 1px dashed #cbd5e1; padding-top: 6px;">
-                <strong>Delivery Time Slot:</strong> <span style="color: #00204E; font-weight: bold;">' . htmlspecialchars($slot_label) . '</span>'
-                . ($window_display ? ' &nbsp;|&nbsp; <strong>Est. Delivery Window:</strong> <span style="color: #34A129; font-weight: bold;">' . htmlspecialchars($window_display) . '</span>' : '')
-            . '</td>
-        </tr>
-    </table>
+        // Yesterday orders & sales
+        $yesterday_start = date('Y-m-d 00:00:00', strtotime('-1 day'));
+        $yesterday_end   = date('Y-m-d 23:59:59', strtotime('-1 day'));
 
-    <table class="items-table">
-        <thead>
-            <tr>
-                <th style="width: 8%; text-align: center;">#</th>
-                <th style="width: 48%;">Item Description</th>
-                <th style="width: 12%; text-align: center;">Qty</th>
-                <th style="width: 16%; text-align: right;">Price</th>
-                <th style="width: 16%; text-align: right;">Total</th>
-            </tr>
-        </thead>
-        <tbody>
-            ' . $items_rows . '
-        </tbody>
-    </table>
+        $yesterday_res = $this->db->query("
+            SELECT COUNT(DISTINCT o.id) as order_count,
+                   COALESCE(SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)), 0) as total_sales
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            WHERE oi.vendor_id = ?
+              AND o.created_at >= ? AND o.created_at <= ?
+        ", [$vendor_id, $yesterday_start, $yesterday_end])->row();
 
-    <table class="totals-table">
-        <tr>
-            <td style="color: #64748b; padding: 5px 6px;">Items Subtotal:</td>
-            <td style="text-align: right; font-weight: bold; padding: 5px 6px;">&#8377; ' . $subtotal_fmt . '</td>
-        </tr>
-        ' . $base_delivery_row . '
-        ' . $urgent_row . '
-        <tr>
-            <td style="color: #64748b; padding: 5px 6px; font-size: 10px;">Time Slot & Window:</td>
-            <td style="text-align: right; color: #00204E; font-weight: bold; padding: 5px 6px; font-size: 10px;">' . htmlspecialchars($slot_label) . ($window_display ? '<br><span style="color: #34A129; font-size: 9px; font-weight: normal;">' . htmlspecialchars($window_display) . '</span>' : '') . '</td>
-        </tr>
-        <tr class="grand-total-row">
-            <td>Grand Total:</td>
-            <td style="text-align: right; color: #34A129;">&#8377; ' . $total_fmt . '</td>
-        </tr>
-    </table>
+        $yesterday_orders = $yesterday_res ? (int)$yesterday_res->order_count : 0;
+        $yesterday_sales  = $yesterday_res ? round((float)$yesterday_res->total_sales, 2) : 0.00;
 
-    <div class="footer">
-        <p style="font-weight: bold; color: #00204E; margin: 0 0 4px;">Thank you for shopping with Recomm!</p>
-        <p style="margin: 0;">This is a computer-generated tax invoice and does not require a physical signature.</p>
-    </div>
-</body>
-</html>';
+        // Orders % change
+        if ($yesterday_orders > 0) {
+            $orders_change = round((($today_orders - $yesterday_orders) / $yesterday_orders) * 100);
+        } else {
+            $orders_change = $today_orders > 0 ? 100 : 0;
+        }
+        $orders_dir = $orders_change >= 0 ? 'up' : 'down';
+
+        // Sales % change
+        if ($yesterday_sales > 0) {
+            $sales_change = round((($today_sales - $yesterday_sales) / $yesterday_sales) * 100);
+        } else {
+            $sales_change = $today_sales > 0 ? 100 : 0;
+        }
+        $sales_dir = $sales_change >= 0 ? 'up' : 'down';
+
+        // Pending orders
+        $pending_res = $this->db->query("
+            SELECT COUNT(DISTINCT o.id) as pending_count
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            WHERE oi.vendor_id = ?
+              AND o.status IN ('pending', 'new', 'confirmed', 'accepted', 'packed')
+        ", [$vendor_id])->row();
+        $pending_orders = $pending_res ? (int)$pending_res->pending_count : 0;
+
+        // 2. Sales Data (Past 7 days)
+        $sales_data = [];
+        for ($i = 6; $i >= 0; $i--) {
+            $day_date  = date('Y-m-d', strtotime("-$i days"));
+            $day_label = date('D', strtotime($day_date));
+            $d_start   = "$day_date 00:00:00";
+            $d_end     = "$day_date 23:59:59";
+
+            $d_res = $this->db->query("
+                SELECT COALESCE(SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)), 0) as day_sales
+                FROM orders o
+                JOIN order_items oi ON oi.order_id = o.id
+                WHERE oi.vendor_id = ?
+                  AND o.created_at >= ? AND o.created_at <= ?
+            ", [$vendor_id, $d_start, $d_end])->row();
+
+            $sales_data[] = [
+                'day'   => $day_label,
+                'date'  => $day_date,
+                'sales' => $d_res ? round((float)$d_res->day_sales, 2) : 0.00
+            ];
+        }
+
+        // 3. Recent Orders (Latest 5)
+        $recent_rows = $this->db->query("
+            SELECT o.id, o.order_number, o.status, o.created_at,
+                   u.name as customer_name,
+                   COUNT(oi.id) as item_count,
+                   SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)) as vendor_total
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            LEFT JOIN users u ON u.id = o.user_id
+            WHERE oi.vendor_id = ?
+            GROUP BY o.id
+            ORDER BY o.id DESC
+            LIMIT 5
+        ", [$vendor_id])->result();
+
+        $recent_orders = [];
+        $now = time();
+        foreach ($recent_rows as $ro) {
+            $created_ts = strtotime($ro->created_at);
+            $time_diff = $now - $created_ts;
+
+            if ($time_diff < 3600) {
+                $time_str = max(1, round($time_diff / 60)) . ' mins ago';
+            } elseif (date('Y-m-d') === date('Y-m-d', $created_ts)) {
+                $time_str = 'Today, ' . date('h:i A', $created_ts);
+            } elseif (date('Y-m-d', strtotime('-1 day')) === date('Y-m-d', $created_ts)) {
+                $time_str = 'Yesterday, ' . date('h:i A', $created_ts);
+            } else {
+                $time_str = date('d M, h:i A', $created_ts);
+            }
+
+            $display_status = $ro->status === 'confirmed' ? 'accepted' : $ro->status;
+
+            $recent_orders[] = [
+                'id'           => (int)$ro->id,
+                'orderNumber'  => $ro->order_number,
+                'customerName' => $ro->customer_name ?: 'Customer',
+                'items'        => (int)$ro->item_count,
+                'amount'       => round((float)$ro->vendor_total, 2),
+                'status'       => $display_status,
+                'time'         => $time_str,
+                'rawDate'      => $ro->created_at
+            ];
+        }
+
+        // 4. Top Products (By Units Sold & Revenue)
+        $top_rows = $this->db->query("
+            SELECT oi.product_name,
+                   SUM(oi.quantity) as sold,
+                   SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)) as revenue,
+                   c.name as category_name
+            FROM order_items oi
+            LEFT JOIN vendor_products vp ON vp.id = oi.product_id
+            LEFT JOIN categories c ON c.id = vp.category_id
+            WHERE oi.vendor_id = ?
+            GROUP BY oi.product_name
+            ORDER BY sold DESC, revenue DESC
+            LIMIT 5
+        ", [$vendor_id])->result();
+
+        $top_products = [];
+        $p_idx = 1;
+        foreach ($top_rows as $tp) {
+            $top_products[] = [
+                'id'       => $p_idx++,
+                'name'     => $tp->product_name,
+                'category' => $tp->category_name ?: 'General',
+                'sold'     => (int)$tp->sold,
+                'revenue'  => round((float)$tp->revenue, 2)
+            ];
+        }
+
+        // If fewer than 5 products, supplement with active vendor products
+        if (count($top_products) < 5) {
+            $existing_names = array_column($top_products, 'name');
+            $this->db->select('vp.product_name, c.name as category_name');
+            $this->db->from('vendor_products vp');
+            $this->db->join('categories c', 'c.id = vp.category_id', 'left');
+            $this->db->where('vp.vendor_id', $vendor_id);
+            $this->db->where('vp.is_active', 1);
+            if (!empty($existing_names)) {
+                $this->db->where_not_in('vp.product_name', $existing_names);
+            }
+            $this->db->limit(5 - count($top_products));
+            $other_prods = $this->db->get()->result();
+
+            foreach ($other_prods as $op) {
+                $top_products[] = [
+                    'id'       => $p_idx++,
+                    'name'     => $op->product_name,
+                    'category' => $op->category_name ?: 'General',
+                    'sold'     => 0,
+                    'revenue'  => 0.00
+                ];
+            }
+        }
+
+        $response_data = [
+            'stats' => [
+                'todayOrders'       => $today_orders,
+                'todayOrdersChange' => abs($orders_change),
+                'todayOrdersDir'    => $orders_dir,
+                'todaySales'        => $today_sales,
+                'todaySalesChange'  => abs($sales_change),
+                'todaySalesDir'     => $sales_dir,
+                'pendingOrders'     => $pending_orders,
+                'customerRating'    => 4.8,
+                'notifications'     => $pending_orders
+            ],
+            'salesData'    => $sales_data,
+            'recentOrders' => $recent_orders,
+            'topProducts'  => $top_products
+        ];
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status'  => true,
+                'code'    => 200,
+                'message' => 'Dashboard data retrieved successfully.',
+                'data'    => $response_data
+            ]));
     }
 }

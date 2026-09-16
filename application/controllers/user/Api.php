@@ -20,14 +20,9 @@ class Api extends CI_Controller
         $this->load->library(['session', 'form_validation', 'upload']);
         $this->load->helper(['url', 'form']);
 
-        // Check and prepare DB tables if missing
-        $this->check_cart_table();
-        $this->check_wishlist_table();
-        $this->ensure_address_table();
-        $this->ensure_orders_table();
-        $this->ensure_order_items_table();
-        $this->ensure_order_status_history_table();
-        $this->ensure_products_table();
+        // DB migrations are already fully executed and persisted in MySQL schema
+        // Running 50+ DDL and ALTER TABLE queries on every single HTTP request caused severe 1000ms+ lag
+
 
         // CORS Headers
         header("Access-Control-Allow-Origin: *");
@@ -1480,6 +1475,13 @@ class Api extends CI_Controller
         $address_id = $this->db->insert_id();
         $address = $this->db->get_where('user_addresses', ['id' => $address_id, 'user_id' => $user_id])->row();
 
+        // If coordinates were not provided, attempt automatic server-side geocoding
+        if ($address && ($address->latitude === null || $address->longitude === null || (float)$address->latitude == 0)) {
+            $this->load->helper('distance');
+            geocode_address_if_needed($address);
+            $address = $this->db->get_where('user_addresses', ['id' => $address_id, 'user_id' => $user_id])->row();
+        }
+
         return $this->output
             ->set_status_header(201)
             ->set_output(json_encode([
@@ -1593,6 +1595,13 @@ class Api extends CI_Controller
         $this->db->where(['id' => $address_id, 'user_id' => $user_id])->update('user_addresses', $update_data);
         $updated_address = $this->db->get_where('user_addresses', ['id' => $address_id, 'user_id' => $user_id])->row();
 
+        // If coordinates are missing, attempt auto-geocoding
+        if ($updated_address && ($updated_address->latitude === null || $updated_address->longitude === null || (float)$updated_address->latitude == 0)) {
+            $this->load->helper('distance');
+            geocode_address_if_needed($updated_address);
+            $updated_address = $this->db->get_where('user_addresses', ['id' => $address_id, 'user_id' => $user_id])->row();
+        }
+
         return $this->output
             ->set_status_header(200)
             ->set_output(json_encode([
@@ -1688,7 +1697,7 @@ class Api extends CI_Controller
         $payment_method  = strtolower($input_data['payment_method'] ?? 'cod');
         $notes           = trim($input_data['notes'] ?? '');
         $delivery_type   = isset($input_data['delivery_type']) ? trim($input_data['delivery_type']) : 'normal'; // 'normal' or 'urgent'
-        $delivery_option = isset($input_data['delivery_option']) ? trim($input_data['delivery_option']) : 'self'; // 'self' or 'delivery_partner'
+        $delivery_option = !empty($input_data['delivery_option']) ? trim($input_data['delivery_option']) : 'delivery_partner'; // 'delivery_partner' or 'self'
 
         if ($address_id <= 0) {
             return $this->output
@@ -1763,7 +1772,14 @@ class Api extends CI_Controller
         $vendor_id = (int) ($cart_summary['items'][0]['vendor_id'] ?? 0);
         $vendor = null;
         if ($vendor_id > 0) {
-            $vendor = $this->db->select('id, latitude, longitude, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, opening_time, closing_time, is_holiday')->get_where('users', ['id' => $vendor_id])->row();
+            $vendor = $this->db->select('id, address, pincode, latitude, longitude, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, opening_time, closing_time, is_holiday')->get_where('users', ['id' => $vendor_id])->row();
+        }
+
+        if ($address) {
+            geocode_address_if_needed($address);
+        }
+        if ($vendor) {
+            geocode_vendor_if_needed($vendor);
         }
 
         $distance = null;
@@ -1792,12 +1808,7 @@ class Api extends CI_Controller
             $distance_method = 'pure_math';
         }
 
-        $base_charge = round($distance * 10.00, 2);
-        if ($delivery_type === 'urgent') {
-            $delivery_charge = round($base_charge + 50.00, 2);
-        } else {
-            $delivery_charge = $base_charge;
-        }
+        $delivery_charge = calculate_delivery_charge_amount($distance, $delivery_type);
 
         // Calculate delivery time slot window
         $chosen_time_option = isset($input_data['chosen_time_option']) ? trim(strtolower($input_data['chosen_time_option'])) : 'immediately';
@@ -1818,7 +1829,7 @@ class Api extends CI_Controller
         $total_gst    = $cart_summary['total_gst'];
         $discount     = 0.00;
         $total_amount = round($subtotal + $total_gst + $delivery_charge - $discount, 2);
-        $order_number = 'GMB' . date('Ymd') . strtoupper(substr(uniqid(), -6));
+        $order_number = 'REC' . date('Ymd') . strtoupper(substr(uniqid(), -6));
 
         /* ---------------- ONLINE PAYMENT ---------------- */
         if ($payment_method === 'online') {
@@ -2028,13 +2039,20 @@ class Api extends CI_Controller
 
         $vendor = null;
         if ($vendor_id > 0) {
-            $vendor = $this->db->select('id, latitude, longitude, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, opening_time, closing_time, is_holiday')->get_where('users', ['id' => $vendor_id])->row();
+            $vendor = $this->db->select('id, address, pincode, latitude, longitude, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, opening_time, closing_time, is_holiday')->get_where('users', ['id' => $vendor_id])->row();
         }
 
         $distance = null;
         $distance_method = 'pure_math';
 
         $this->load->helper('distance');
+
+        if ($address) {
+            geocode_address_if_needed($address);
+        }
+        if ($vendor) {
+            geocode_vendor_if_needed($vendor);
+        }
 
         if (
             $vendor && $address &&
@@ -2043,7 +2061,9 @@ class Api extends CI_Controller
             (float) $vendor->latitude != 0 && (float) $vendor->longitude != 0 &&
             (float) $address->latitude != 0 && (float) $address->longitude != 0
         ) {
-            $distance = calculate_distance_km($vendor->latitude, $vendor->longitude, $address->latitude, $address->longitude);
+            $resolved = resolve_order_distance($vendor->latitude, $vendor->longitude, $address->latitude, $address->longitude, true);
+            $distance = $resolved['distance_km'];
+            $distance_method = $resolved['method'];
         }
 
         if ($distance === null) {
@@ -2054,7 +2074,8 @@ class Api extends CI_Controller
             }
         }
 
-        $base_charge = round($distance * 10.00, 2);
+        $rate_per_km = get_delivery_charge_per_km();
+        $base_charge = round($distance * $rate_per_km, 2);
         $extra_charge = ($delivery_type === 'urgent') ? 50.00 : 0.00;
         $delivery_charge = round($base_charge + $extra_charge, 2);
 
@@ -2071,9 +2092,11 @@ class Api extends CI_Controller
                     'distance_km'           => $distance,
                     'distance_method'       => $distance_method,
                     'delivery_type'         => $delivery_type,
+                    'rate_per_km'           => $rate_per_km,
                     'base_delivery_charge'  => $base_charge,
                     'extra_delivery_charge' => $extra_charge,
                     'total_delivery_charge' => $delivery_charge,
+                    'delivery_charge'       => $delivery_charge,
                     'slots'                 => $slots
                 ]
             ]));
@@ -2220,12 +2243,18 @@ class Api extends CI_Controller
         $valid_statuses = ['pending', 'confirmed', 'packed', 'out_for_delivery', 'delivered', 'cancelled'];
 
         $this->db->where('user_id', $user_id);
+        if ($this->db->field_exists('hidden_by_customer', 'orders')) {
+            $this->db->where('hidden_by_customer', 0);
+        }
         if ($normalized_status !== '' && in_array($normalized_status, $valid_statuses, true)) {
             $this->db->where('status', $normalized_status);
         }
         $total_orders = $this->db->count_all_results('orders');
 
         $this->db->where('user_id', $user_id);
+        if ($this->db->field_exists('hidden_by_customer', 'orders')) {
+            $this->db->where('hidden_by_customer', 0);
+        }
         if ($normalized_status !== '' && in_array($normalized_status, $valid_statuses, true)) {
             $this->db->where('status', $normalized_status);
         }
@@ -2431,6 +2460,68 @@ class Api extends CI_Controller
             ]));
     }
 
+    /**
+     * Customer hide order from their own history view
+     */
+    public function hide_order()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_orders_table();
+
+        $input_data = json_decode($this->input->raw_input_stream, true);
+        if (empty($input_data)) {
+            $input_data = $this->input->post();
+        }
+
+        $order_id = intval($input_data['order_id'] ?? 0);
+        if ($order_id <= 0) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 400,
+                    'message' => 'A valid order ID is required.',
+                    'data' => null
+                ]));
+        }
+
+        $order = $this->db->get_where('orders', [
+            'id'      => $order_id,
+            'user_id' => $user_id
+        ])->row();
+
+        if (!$order) {
+            return $this->output
+                ->set_status_header(404)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 404,
+                    'message' => 'Order not found or does not belong to your account.',
+                    'data' => null
+                ]));
+        }
+
+        $this->db->where('id', $order_id)->update('orders', [
+            'hidden_by_customer' => 1,
+            'updated_at'         => date('Y-m-d H:i:s')
+        ]);
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Order removed from your history.',
+                'data' => [
+                    'order_id'     => $order_id,
+                    'order_number' => $order->order_number
+                ]
+            ]));
+    }
+
     // ==========================================
     // 7. VENDOR ORDERS MANAGEMENT FLOW
     // ==========================================
@@ -2517,7 +2608,15 @@ class Api extends CI_Controller
                 'status' => $order->status,
                 'payment_method' => $order->payment_method,
                 'payment_status' => $order->payment_status,
-                'total_amount' => round($vendor_total, 2),
+                'total_amount' => round($vendor_total + (float)$order->delivery_charge, 2),
+                'delivery_charge' => (float)$order->delivery_charge,
+                'delivery_option' => $order->delivery_option ?? 'delivery_partner',
+                'distance' => $order->distance ? (float)$order->distance : null,
+                'distance_km' => isset($order->distance_km) ? (float)$order->distance_km : ($order->distance ? (float)$order->distance : null),
+                'distance_method' => $order->distance_method ?? 'pure_math',
+                'delivery_type' => $order->delivery_type ?? 'normal',
+                'chosen_time_option' => $order->chosen_time_option ?? 'immediately',
+                'estimated_window_formatted' => function_exists('format_slot_window_display') ? format_slot_window_display($order->chosen_time_option ?? 'immediately', $order->estimated_window_start ?? null, $order->estimated_window_end ?? null) : ($order->chosen_time_option ?? 'immediately'),
                 'created_at' => $order->created_at,
                 'customer_name' => $order->customer_name,
                 'customer_mobile' => $order->customer_mobile,
@@ -2704,9 +2803,11 @@ class Api extends CI_Controller
                 'code' => 200,
                 'message' => 'Home data fetched successfully',
                 'data' => [
-                    'categories' => $categories,
-                    'products' => $discovery['products'],
-                    'delivery_radius_km' => $discovery['delivery_radius_km']
+                    'categories'           => $categories,
+                    'products'             => $discovery['products'],
+                    'delivery_radius_km'   => $discovery['delivery_radius_km'],
+                    'nearby_vendors_count' => (int)($discovery['nearby_vendors_count'] ?? 0),
+                    'no_nearby_vendors'    => (bool)($discovery['no_nearby_vendors'] ?? false)
                 ]
             ]));
     }
@@ -2851,7 +2952,9 @@ class Api extends CI_Controller
                 'code' => 200,
                 'message' => 'Products fetched successfully',
                 'data' => $discovery['products'],
-                'delivery_radius_km' => $discovery['delivery_radius_km']
+                'delivery_radius_km' => $discovery['delivery_radius_km'],
+                'nearby_vendors_count' => (int)($discovery['nearby_vendors_count'] ?? 0),
+                'no_nearby_vendors' => (bool)($discovery['no_nearby_vendors'] ?? false)
             ]));
     }
 
@@ -2915,7 +3018,9 @@ class Api extends CI_Controller
                     'total_pages' => $discovery['total_pages']
                 ],
                 'filters' => $discovery['filters'],
-                'delivery_radius_km' => $discovery['delivery_radius_km']
+                'delivery_radius_km' => $discovery['delivery_radius_km'],
+                'nearby_vendors_count' => (int)($discovery['nearby_vendors_count'] ?? 0),
+                'no_nearby_vendors' => (bool)($discovery['no_nearby_vendors'] ?? false)
             ]));
     }
 
@@ -3222,8 +3327,12 @@ class Api extends CI_Controller
                         'total_pages' => $discovery['total_pages']
                     ],
                     'filters' => $discovery['filters'],
-                    'delivery_radius_km' => $discovery['delivery_radius_km']
-                ]
+                    'delivery_radius_km' => $discovery['delivery_radius_km'],
+                    'nearby_vendors_count' => (int)($discovery['nearby_vendors_count'] ?? 0),
+                    'no_nearby_vendors' => (bool)($discovery['no_nearby_vendors'] ?? false)
+                ],
+                'nearby_vendors_count' => (int)($discovery['nearby_vendors_count'] ?? 0),
+                'no_nearby_vendors' => (bool)($discovery['no_nearby_vendors'] ?? false)
             ]));
     }
 
@@ -3616,6 +3725,21 @@ class Api extends CI_Controller
             }
         }
 
+        // Fallback 2: fallback to first active vendor coordinates so guest visitors without GPS don't get 422 errors
+        if (($lat === null || $lon === null) || !is_numeric($lat) || !is_numeric($lon)) {
+            $default_vendor = $this->db->where('role', 'vendor')
+                                       ->where('is_active', 1)
+                                       ->where('latitude IS NOT NULL', null, false)
+                                       ->where('longitude IS NOT NULL', null, false)
+                                       ->order_by('id', 'ASC')
+                                       ->get('users')
+                                       ->row();
+            if ($default_vendor && is_numeric($default_vendor->latitude) && is_numeric($default_vendor->longitude)) {
+                $lat = (float)$default_vendor->latitude;
+                $lon = (float)$default_vendor->longitude;
+            }
+        }
+
         if ($lat !== null && $lon !== null && is_numeric($lat) && is_numeric($lon)) {
             $lat = (float)$lat;
             $lon = (float)$lon;
@@ -3649,6 +3773,24 @@ class Api extends CI_Controller
 
         $this->load->helper('distance');
         $delivery_radius_km = get_delivery_radius_km();
+
+        // Count active vendors within delivery radius for this location (independent of filters)
+        $all_active_vendors = $this->db->select('id, latitude, longitude')
+            ->where('role', 'vendor')
+            ->where('is_active', 1)
+            ->where('latitude IS NOT NULL', null, false)
+            ->where('longitude IS NOT NULL', null, false)
+            ->get('users')
+            ->result();
+
+        $nearby_vendors_count = 0;
+        foreach ($all_active_vendors as $v) {
+            if (is_numeric($v->latitude) && is_numeric($v->longitude) && (float)$v->latitude != 0 && (float)$v->longitude != 0) {
+                if (calculate_distance_km($cust_lat, $cust_lon, $v->latitude, $v->longitude) <= $delivery_radius_km) {
+                    $nearby_vendors_count++;
+                }
+            }
+        }
 
         // Query candidate vendor products
         $this->get_vendor_products_query();
@@ -3874,6 +4016,8 @@ class Api extends CI_Controller
             'page' => $page,
             'limit' => $limit,
             'delivery_radius_km' => $delivery_radius_km,
+            'nearby_vendors_count' => $nearby_vendors_count,
+            'no_nearby_vendors' => ($nearby_vendors_count === 0),
             'filters' => [
                 'categories' => array_values($facet_categories),
                 'brands' => array_values($facet_brands),
@@ -4277,6 +4421,9 @@ class Api extends CI_Controller
         if (!$this->db->field_exists('created_at', 'orders')) {
             $this->db->query("ALTER TABLE `orders` ADD COLUMN `created_at` DATETIME DEFAULT NULL");
         }
+        if (!$this->db->field_exists('hidden_by_customer', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `hidden_by_customer` TINYINT(1) NOT NULL DEFAULT 0 AFTER `status`");
+        }
         if (!$this->db->field_exists('updated_at', 'orders')) {
             $this->db->query("ALTER TABLE `orders` ADD COLUMN `updated_at` DATETIME DEFAULT NULL");
         }
@@ -4469,10 +4616,25 @@ class Api extends CI_Controller
             return;
         }
 
+        $this->load->helper('invoice');
+
+        // Allow on-screen HTML viewing if ?view=html or ?format=html
+        if ($this->input->get('view') === 'html' || $this->input->get('format') === 'html') {
+            $html = $this->generate_order_invoice_html($order_id);
+            if (!$html) {
+                show_404();
+                return;
+            }
+            $this->output
+                ->set_content_type('text/html')
+                ->set_output($html);
+            return;
+        }
+
         $dir = FCPATH . 'assets/uploads/invoices/';
         $filepath = $dir . 'invoice_' . $order_id . '.pdf';
 
-        if (!file_exists($filepath)) {
+        if ($this->input->get('regenerate') || !file_exists($filepath)) {
             $this->generate_order_invoice_file($order_id);
         }
 
@@ -4548,344 +4710,8 @@ class Api extends CI_Controller
 
     public function generate_order_invoice_html($order_id, $vendor_id = null)
     {
-        $order = $this->db->get_where('orders', ['id' => $order_id])->row();
-        if (!$order) {
-            return null;
-        }
-
-        $customer = $this->db->get_where('users', ['id' => $order->user_id])->row();
-        $address = $this->db->get_where('user_addresses', ['id' => $order->address_id])->row();
-
-        $this->db->where('order_id', $order_id);
-        if ($vendor_id) {
-            $this->db->where('vendor_id', $vendor_id);
-        }
-        $items = $this->db->get('order_items')->result();
-        if (empty($items)) {
-            $items = $this->db->where('order_id', $order_id)->get('order_items')->result();
-        }
-        if (empty($items)) {
-            return null;
-        }
-
-        $actual_vendor_id = $vendor_id ?: ($items[0]->vendor_id ?? 0);
-        $vendor = $this->db->get_where('users', ['id' => $actual_vendor_id])->row();
-
-        $subtotal = 0.00;
-        $items_rows = '';
-        $idx = 1;
-        foreach ($items as $item) {
-            $line_total = ($item->price * $item->quantity);
-            $subtotal += $line_total;
-            $p_name = htmlspecialchars($item->product_name);
-            $p_qty = (int)$item->quantity;
-            $p_price = number_format((float)$item->price, 2);
-            $p_line = number_format((float)$line_total, 2);
-            $bg = ($idx % 2 === 0) ? '#fbfcfe' : '#ffffff';
-
-            $items_rows .= "
-                <tr style='background-color: {$bg};'>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #64748b;'>{$idx}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #00204E;'>{$p_name}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #334155;'>{$p_qty}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #334155;'>&#8377; {$p_price}</td>
-                    <td style='padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold; color: #34A129;'>&#8377; {$p_line}</td>
-                </tr>
-            ";
-            $idx++;
-        }
-
-        $is_urgent = (isset($order->delivery_type) && strtolower($order->delivery_type) === 'urgent');
-        $urgent_charge = $is_urgent ? 50.00 : 0.00;
-        $delivery_charge = floatval($order->delivery_charge ?? 0.00);
-        $base_delivery_charge = ($is_urgent && $delivery_charge >= 50) ? ($delivery_charge - 50.00) : $delivery_charge;
-        $grand_total = floatval($order->total_amount ?? ($subtotal + $delivery_charge));
-
-        $order_number = htmlspecialchars($order->order_number ?? ('ORD-' . $order->id));
-        $date_str = date('d M Y, h:i A', strtotime($order->created_at ?: ($order->created_on ?: 'now')));
-
-        $vendor_name = htmlspecialchars($vendor->store_name ?? ($vendor->name ?? 'Recomm Vendor Store'));
-        $vendor_owner = htmlspecialchars($vendor->owner_name ?? ($vendor->name ?? 'Store Owner'));
-        $vendor_phone = htmlspecialchars($vendor->mobile ?? ($vendor->contact_number ?? ''));
-        $vendor_addr = htmlspecialchars($vendor->address ?? 'Store Address');
-        $vendor_pin = htmlspecialchars($vendor->pincode ?? '');
-
-        $cust_name = htmlspecialchars($address->full_name ?? ($customer->name ?? 'Valued Customer'));
-        $cust_phone = htmlspecialchars($address->mobile ?? ($customer->mobile ?? ''));
-        $cust_addr = $address ? htmlspecialchars("{$address->address_line1}, {$address->city} - {$address->pincode}") : 'Customer Delivery Address';
-
-        $pay_method = strtoupper(htmlspecialchars($order->payment_method ?? 'COD'));
-        $pay_status = strtoupper(htmlspecialchars($order->payment_status ?? 'PENDING'));
-        $del_mode = ($order->delivery_option === 'self') ? 'By Self' : 'Delivery Partner';
-        $distance_km = $order->distance ? floatval($order->distance) . ' KM' : '';
-
-        $urgent_badge = $is_urgent
-            ? '<span style="background-color:#fef2f2; color:#dc2626; border:1px solid #fecaca; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">⚡ URGENT DELIVERY</span>'
-            : '<span style="background-color:#f0fdf4; color:#166534; border:1px solid #bbf7d0; padding:3px 8px; border-radius:4px; font-weight:bold; font-size:10px;">STANDARD DELIVERY</span>';
-
-        $urgent_row = $is_urgent ? "
-            <tr>
-                <td style='padding: 5px 6px; color: #dc2626; font-weight: bold;'>⚡ Urgent Delivery Surcharge:</td>
-                <td style='padding: 5px 6px; text-align: right; color: #dc2626; font-weight: bold;'>+ &#8377; " . number_format($urgent_charge, 2) . "</td>
-            </tr>" : "";
-
-        $base_delivery_row = $base_delivery_charge > 0 ? "
-            <tr>
-                <td style='padding: 5px 6px; color: #64748b;'>Delivery Charge" . ($distance_km ? " ({$distance_km})" : "") . ":</td>
-                <td style='padding: 5px 6px; text-align: right; color: #334155; font-weight: bold;'>+ &#8377; " . number_format($base_delivery_charge, 2) . "</td>
-            </tr>" : "";
-
-        $subtotal_fmt = number_format($subtotal, 2);
-        $total_fmt = number_format($grand_total, 2);
-
-        $chosen_slot_opt = $order->chosen_time_option ?? 'immediately';
-        $slot_label = ucfirst($chosen_slot_opt);
-        if ($chosen_slot_opt === 'later') $slot_label = 'Later (3–4 hrs)';
-        if ($chosen_slot_opt === 'immediately') $slot_label = 'Immediately';
-        if ($chosen_slot_opt === 'lunch') $slot_label = 'Lunch Window';
-        if ($chosen_slot_opt === 'dinner') $slot_label = 'Dinner Window';
-        if ($chosen_slot_opt === 'custom') $slot_label = 'Custom Scheduled';
-
-        $window_display = '';
-        if (!empty($order->estimated_window_start) && !empty($order->estimated_window_end)) {
-            $window_display = function_exists('format_slot_window_display')
-                ? format_slot_window_display($order->estimated_window_start, $order->estimated_window_end, strtotime($order->created_at ?: 'now'))
-                : (date('d M, h:i A', strtotime($order->estimated_window_start)) . ' – ' . date('h:i A', strtotime($order->estimated_window_end)));
-        }
-
-        return '<!DOCTYPE html>
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
-<title>Invoice - ' . $order_number . '</title>
-<style>
-    @page {
-        margin: 12mm 15mm;
-        size: A4 portrait;
-    }
-    body {
-        font-family: "DejaVu Sans", sans-serif;
-        font-size: 11px;
-        color: #1e293b;
-        margin: 0;
-        padding: 0;
-        line-height: 1.4;
-    }
-    .top-bar {
-        height: 6px;
-        background-color: #00204E;
-        margin-bottom: 16px;
-    }
-    table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-    .header-table td {
-        vertical-align: top;
-    }
-    .brand-title {
-        font-size: 24px;
-        font-weight: bold;
-        color: #00204E;
-        letter-spacing: -0.5px;
-    }
-    .brand-sub {
-        font-size: 10px;
-        font-weight: bold;
-        color: #34A129;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-top: 2px;
-    }
-    .invoice-title {
-        font-size: 20px;
-        font-weight: bold;
-        color: #00204E;
-        text-align: right;
-    }
-    .invoice-num {
-        font-size: 13px;
-        font-weight: bold;
-        color: #34A129;
-        text-align: right;
-        margin-top: 2px;
-    }
-    .invoice-date {
-        font-size: 11px;
-        color: #64748b;
-        text-align: right;
-        margin-top: 3px;
-    }
-    .section-divider {
-        border-bottom: 1.5px solid #e2e8f0;
-        margin: 14px 0;
-    }
-    .parties-table {
-        margin-bottom: 14px;
-        background-color: #f8fafc;
-        border: 1px solid #e2e8f0;
-    }
-    .parties-table td {
-        width: 50%;
-        padding: 12px 14px;
-        vertical-align: top;
-    }
-    .party-heading {
-        font-size: 10px;
-        font-weight: bold;
-        color: #94a3b8;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 4px;
-    }
-    .party-name {
-        font-size: 13px;
-        font-weight: bold;
-        color: #00204E;
-        margin-bottom: 3px;
-    }
-    .party-info {
-        font-size: 11px;
-        color: #475569;
-        line-height: 1.4;
-    }
-    .meta-table {
-        background-color: #f1f5f9;
-        border: 1px solid #e2e8f0;
-        margin-bottom: 16px;
-    }
-    .meta-table td {
-        padding: 8px 12px;
-        font-size: 11px;
-    }
-    .items-table {
-        margin-bottom: 16px;
-    }
-    .items-table th {
-        background-color: #00204E;
-        color: #ffffff;
-        font-size: 10px;
-        font-weight: bold;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        padding: 8px 10px;
-        text-align: left;
-    }
-    .totals-table {
-        width: 320px;
-        margin-left: auto;
-    }
-    .totals-table td {
-        padding: 4px 6px;
-        font-size: 11px;
-    }
-    .grand-total-row td {
-        border-top: 2px solid #00204E;
-        border-bottom: 2px solid #00204E;
-        font-size: 14px;
-        font-weight: bold;
-        color: #00204E;
-        padding: 8px 6px;
-    }
-    .footer {
-        margin-top: 26px;
-        border-top: 1px solid #e2e8f0;
-        padding-top: 12px;
-        text-align: center;
-        font-size: 10px;
-        color: #64748b;
-    }
-</style>
-</head>
-<body>
-    <div class="top-bar"></div>
-
-    <table class="header-table">
-        <tr>
-            <td style="width: 55%;">
-                <div class="brand-title">RECOMM</div>
-                <div class="brand-sub">Smart Store & Quick Delivery</div>
-            </td>
-            <td style="width: 45%;">
-                <div class="invoice-title">TAX INVOICE</div>
-                <div class="invoice-num">#' . $order_number . '</div>
-                <div class="invoice-date">Date: ' . $date_str . '</div>
-            </td>
-        </tr>
-    </table>
-
-    <div class="section-divider"></div>
-
-    <table class="parties-table">
-        <tr>
-            <td>
-                <div class="party-heading">Sold By (Vendor)</div>
-                <div class="party-name">' . $vendor_name . '</div>'
-                . ($vendor_owner ? '<div class="party-info">Owner: ' . $vendor_owner . '</div>' : '')
-                . ($vendor_phone ? '<div class="party-info">Mobile: ' . $vendor_phone . '</div>' : '')
-                . '<div class="party-info">' . $vendor_addr . ($vendor_pin ? ' - ' . $vendor_pin : '') . '</div>
-            </td>
-            <td style="border-left: 1px solid #e2e8f0;">
-                <div class="party-heading">Billed & Delivered To</div>
-                <div class="party-name">' . $cust_name . '</div>'
-                . ($cust_phone ? '<div class="party-info">Mobile: ' . $cust_phone . '</div>' : '')
-                . '<div class="party-info">' . $cust_addr . '</div>
-            </td>
-        </tr>
-    </table>
-
-    <table class="meta-table">
-        <tr>
-            <td><strong>Payment:</strong> ' . $pay_method . ' (' . $pay_status . ')</td>
-            <td><strong>Mode:</strong> ' . $del_mode . ($distance_km ? ' (' . $distance_km . ')' : '') . '</td>
-            <td><strong>Type:</strong> ' . $urgent_badge . '</td>
-        </tr>
-        <tr>
-            <td colspan="3" style="border-top: 1px dashed #cbd5e1; padding-top: 6px;">
-                <strong>Delivery Time Slot:</strong> <span style="color: #00204E; font-weight: bold;">' . htmlspecialchars($slot_label) . '</span>'
-                . ($window_display ? ' &nbsp;|&nbsp; <strong>Est. Delivery Window:</strong> <span style="color: #34A129; font-weight: bold;">' . htmlspecialchars($window_display) . '</span>' : '')
-            . '</td>
-        </tr>
-    </table>
-
-    <table class="items-table">
-        <thead>
-            <tr>
-                <th style="width: 8%; text-align: center;">#</th>
-                <th style="width: 48%;">Item Description</th>
-                <th style="width: 12%; text-align: center;">Qty</th>
-                <th style="width: 16%; text-align: right;">Price</th>
-                <th style="width: 16%; text-align: right;">Total</th>
-            </tr>
-        </thead>
-        <tbody>
-            ' . $items_rows . '
-        </tbody>
-    </table>
-
-    <table class="totals-table">
-        <tr>
-            <td style="color: #64748b; padding: 5px 6px;">Items Subtotal:</td>
-            <td style="text-align: right; font-weight: bold; padding: 5px 6px;">&#8377; ' . $subtotal_fmt . '</td>
-        </tr>
-        ' . $base_delivery_row . '
-        ' . $urgent_row . '
-        <tr>
-            <td style="color: #64748b; padding: 5px 6px; font-size: 10px;">Time Slot & Window:</td>
-            <td style="text-align: right; color: #00204E; font-weight: bold; padding: 5px 6px; font-size: 10px;">' . htmlspecialchars($slot_label) . ($window_display ? '<br><span style="color: #34A129; font-size: 9px; font-weight: normal;">' . htmlspecialchars($window_display) . '</span>' : '') . '</td>
-        </tr>
-        <tr class="grand-total-row">
-            <td>Grand Total:</td>
-            <td style="text-align: right; color: #34A129;">&#8377; ' . $total_fmt . '</td>
-        </tr>
-    </table>
-
-    <div class="footer">
-        <p style="font-weight: bold; color: #00204E; margin: 0 0 4px;">Thank you for shopping with Recomm!</p>
-        <p style="margin: 0;">This is a computer-generated tax invoice and does not require a physical signature.</p>
-    </div>
-</body>
-</html>';
+        $this->load->helper('invoice');
+        return render_order_invoice_html($order_id, $vendor_id);
     }
 
     /**
@@ -4921,5 +4747,283 @@ class Api extends CI_Controller
                 'distance_km' => $distance_km
             ]
         ]));
+    }
+
+    /**
+     * Get live published legal page content (Terms, Privacy, Refund)
+     * If no customized version has been published, falls back to the shipped default.
+     *
+     * @param string $slug
+     */
+    public function legal_page($slug = '')
+    {
+        $this->ensureMethod('GET');
+        $this->load->helper('legal');
+        $slug = strtolower(trim($slug));
+
+        if (!in_array($slug, get_all_legal_page_slugs())) {
+            return $this->output
+                ->set_status_header(404)
+                ->set_content_type('application/json')
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 404,
+                    'message' => 'Legal page not found.',
+                    'data'    => null,
+                ]));
+        }
+
+        $page = resolve_legal_page($slug);
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_content_type('application/json')
+            ->set_output(json_encode([
+                'status'  => true,
+                'code'    => 200,
+                'message' => 'Legal page retrieved successfully.',
+                'data'    => [
+                    'slug'         => $page['slug'],
+                    'title'        => $page['title'],
+                    'content'      => $page['content'],
+                    'status'       => $page['status'],
+                    'is_default'   => $page['is_default'],
+                    'published_at' => $page['published_at'],
+                    'updated_at'   => $page['updated_at'],
+                    'last_updated' => $page['updated_at'] ? date('d M Y', strtotime($page['updated_at'])) : date('d M Y'),
+                ],
+            ]));
+    }
+
+    /**
+     * Real-time Vendor Dashboard Analytics & Metrics
+     */
+    public function get_vendor_dashboard()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        // Auth
+        $authHeader = $this->input->get_request_header('Authorization', TRUE);
+        $token = null;
+        if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+            $token = $matches[1];
+        }
+
+        $decoded = $this->verify_jwt($token);
+        if (!$decoded || empty($decoded->data->id)) {
+            return $this->output->set_status_header(401)->set_output(json_encode([
+                'status'  => false,
+                'code'    => 401,
+                'message' => 'Unauthorized',
+                'data'    => null
+            ]));
+        }
+
+        $vendor_id = (int)$decoded->data->id;
+
+        // 1. Stats - Today orders & sales
+        $today_start = date('Y-m-d 00:00:00');
+        $today_end   = date('Y-m-d 23:59:59');
+
+        $today_res = $this->db->query("
+            SELECT COUNT(DISTINCT o.id) as order_count,
+                   COALESCE(SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)), 0) as total_sales
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            WHERE oi.vendor_id = ?
+              AND o.created_at >= ? AND o.created_at <= ?
+        ", [$vendor_id, $today_start, $today_end])->row();
+
+        $today_orders = $today_res ? (int)$today_res->order_count : 0;
+        $today_sales  = $today_res ? round((float)$today_res->total_sales, 2) : 0.00;
+
+        // Yesterday orders & sales
+        $yesterday_start = date('Y-m-d 00:00:00', strtotime('-1 day'));
+        $yesterday_end   = date('Y-m-d 23:59:59', strtotime('-1 day'));
+
+        $yesterday_res = $this->db->query("
+            SELECT COUNT(DISTINCT o.id) as order_count,
+                   COALESCE(SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)), 0) as total_sales
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            WHERE oi.vendor_id = ?
+              AND o.created_at >= ? AND o.created_at <= ?
+        ", [$vendor_id, $yesterday_start, $yesterday_end])->row();
+
+        $yesterday_orders = $yesterday_res ? (int)$yesterday_res->order_count : 0;
+        $yesterday_sales  = $yesterday_res ? round((float)$yesterday_res->total_sales, 2) : 0.00;
+
+        // Orders % change
+        if ($yesterday_orders > 0) {
+            $orders_change = round((($today_orders - $yesterday_orders) / $yesterday_orders) * 100);
+        } else {
+            $orders_change = $today_orders > 0 ? 100 : 0;
+        }
+        $orders_dir = $orders_change >= 0 ? 'up' : 'down';
+
+        // Sales % change
+        if ($yesterday_sales > 0) {
+            $sales_change = round((($today_sales - $yesterday_sales) / $yesterday_sales) * 100);
+        } else {
+            $sales_change = $today_sales > 0 ? 100 : 0;
+        }
+        $sales_dir = $sales_change >= 0 ? 'up' : 'down';
+
+        // Pending orders
+        $pending_res = $this->db->query("
+            SELECT COUNT(DISTINCT o.id) as pending_count
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            WHERE oi.vendor_id = ?
+              AND o.status IN ('pending', 'new', 'confirmed', 'accepted', 'packed')
+        ", [$vendor_id])->row();
+        $pending_orders = $pending_res ? (int)$pending_res->pending_count : 0;
+
+        // 2. Sales Data (Past 7 days)
+        $sales_data = [];
+        for ($i = 6; $i >= 0; $i--) {
+            $day_date  = date('Y-m-d', strtotime("-$i days"));
+            $day_label = date('D', strtotime($day_date));
+            $d_start   = "$day_date 00:00:00";
+            $d_end     = "$day_date 23:59:59";
+
+            $d_res = $this->db->query("
+                SELECT COALESCE(SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)), 0) as day_sales
+                FROM orders o
+                JOIN order_items oi ON oi.order_id = o.id
+                WHERE oi.vendor_id = ?
+                  AND o.created_at >= ? AND o.created_at <= ?
+            ", [$vendor_id, $d_start, $d_end])->row();
+
+            $sales_data[] = [
+                'day'   => $day_label,
+                'date'  => $day_date,
+                'sales' => $d_res ? round((float)$d_res->day_sales, 2) : 0.00
+            ];
+        }
+
+        // 3. Recent Orders (Latest 5)
+        $recent_rows = $this->db->query("
+            SELECT o.id, o.order_number, o.status, o.created_at,
+                   u.name as customer_name,
+                   COUNT(oi.id) as item_count,
+                   SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)) as vendor_total
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            LEFT JOIN users u ON u.id = o.user_id
+            WHERE oi.vendor_id = ?
+            GROUP BY o.id
+            ORDER BY o.id DESC
+            LIMIT 5
+        ", [$vendor_id])->result();
+
+        $recent_orders = [];
+        $now = time();
+        foreach ($recent_rows as $ro) {
+            $created_ts = strtotime($ro->created_at);
+            $time_diff = $now - $created_ts;
+
+            if ($time_diff < 3600) {
+                $time_str = max(1, round($time_diff / 60)) . ' mins ago';
+            } elseif (date('Y-m-d') === date('Y-m-d', $created_ts)) {
+                $time_str = 'Today, ' . date('h:i A', $created_ts);
+            } elseif (date('Y-m-d', strtotime('-1 day')) === date('Y-m-d', $created_ts)) {
+                $time_str = 'Yesterday, ' . date('h:i A', $created_ts);
+            } else {
+                $time_str = date('d M, h:i A', $created_ts);
+            }
+
+            $display_status = $ro->status === 'confirmed' ? 'accepted' : $ro->status;
+
+            $recent_orders[] = [
+                'id'           => (int)$ro->id,
+                'orderNumber'  => $ro->order_number,
+                'customerName' => $ro->customer_name ?: 'Customer',
+                'items'        => (int)$ro->item_count,
+                'amount'       => round((float)$ro->vendor_total, 2),
+                'status'       => $display_status,
+                'time'         => $time_str,
+                'rawDate'      => $ro->created_at
+            ];
+        }
+
+        // 4. Top Products (By Units Sold & Revenue)
+        $top_rows = $this->db->query("
+            SELECT oi.product_name,
+                   SUM(oi.quantity) as sold,
+                   SUM(oi.quantity * oi.price + COALESCE(oi.gst_amount, 0)) as revenue,
+                   c.name as category_name
+            FROM order_items oi
+            LEFT JOIN vendor_products vp ON vp.id = oi.product_id
+            LEFT JOIN categories c ON c.id = vp.category_id
+            WHERE oi.vendor_id = ?
+            GROUP BY oi.product_name
+            ORDER BY sold DESC, revenue DESC
+            LIMIT 5
+        ", [$vendor_id])->result();
+
+        $top_products = [];
+        $p_idx = 1;
+        foreach ($top_rows as $tp) {
+            $top_products[] = [
+                'id'       => $p_idx++,
+                'name'     => $tp->product_name,
+                'category' => $tp->category_name ?: 'General',
+                'sold'     => (int)$tp->sold,
+                'revenue'  => round((float)$tp->revenue, 2)
+            ];
+        }
+
+        // If fewer than 5 products, supplement with active vendor products
+        if (count($top_products) < 5) {
+            $existing_names = array_column($top_products, 'name');
+            $this->db->select('vp.product_name, c.name as category_name');
+            $this->db->from('vendor_products vp');
+            $this->db->join('categories c', 'c.id = vp.category_id', 'left');
+            $this->db->where('vp.vendor_id', $vendor_id);
+            $this->db->where('vp.is_active', 1);
+            if (!empty($existing_names)) {
+                $this->db->where_not_in('vp.product_name', $existing_names);
+            }
+            $this->db->limit(5 - count($top_products));
+            $other_prods = $this->db->get()->result();
+
+            foreach ($other_prods as $op) {
+                $top_products[] = [
+                    'id'       => $p_idx++,
+                    'name'     => $op->product_name,
+                    'category' => $op->category_name ?: 'General',
+                    'sold'     => 0,
+                    'revenue'  => 0.00
+                ];
+            }
+        }
+
+        $response_data = [
+            'stats' => [
+                'todayOrders'       => $today_orders,
+                'todayOrdersChange' => abs($orders_change),
+                'todayOrdersDir'    => $orders_dir,
+                'todaySales'        => $today_sales,
+                'todaySalesChange'  => abs($sales_change),
+                'todaySalesDir'     => $sales_dir,
+                'pendingOrders'     => $pending_orders,
+                'customerRating'    => 4.8,
+                'notifications'     => $pending_orders
+            ],
+            'salesData'    => $sales_data,
+            'recentOrders' => $recent_orders,
+            'topProducts'  => $top_products
+        ];
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status'  => true,
+                'code'    => 200,
+                'message' => 'Dashboard data retrieved successfully.',
+                'data'    => $response_data
+            ]));
     }
 }

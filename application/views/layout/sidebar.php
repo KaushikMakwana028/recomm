@@ -372,6 +372,12 @@
                 <span>Settings</span>
             </a>
         </li>
+        <li>
+            <a href="<?= base_url('legal-pages') ?>" class="<?= ($this->uri->segment(1) == 'legal-pages' || $this->uri->segment(1) == 'legal_pages') ? 'active' : '' ?>">
+                <i class="fas fa-file-contract"></i>
+                <span>Legal Pages</span>
+            </a>
+        </li>
     </ul>
 
     <div class="sidebar-footer">

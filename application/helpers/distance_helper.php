@@ -197,6 +197,252 @@ if (!function_exists('set_delivery_radius_km')) {
     }
 }
 
+if (!function_exists('get_delivery_charge_per_km')) {
+    /**
+     * Get the admin-configured delivery charge per kilometer in Rupees.
+     * Reads from the settings table with a fallback default of 10.00 Rs/km.
+     *
+     * @return float Delivery charge per kilometer
+     */
+    function get_delivery_charge_per_km()
+    {
+        if (function_exists('get_instance')) {
+            $CI =& get_instance();
+            if (isset($CI->db) && $CI->db->table_exists('settings')) {
+                $row = $CI->db->where('key', 'delivery_charge_per_km')->get('settings')->row();
+                if ($row && is_numeric($row->value) && (float)$row->value >= 0) {
+                    return (float)$row->value;
+                }
+            }
+        }
+        return 10.00;
+    }
+}
+
+if (!function_exists('set_delivery_charge_per_km')) {
+    /**
+     * Update the admin-configured delivery charge per kilometer in Rupees.
+     *
+     * @param float|numeric $rate_per_km
+     * @return bool
+     */
+    function set_delivery_charge_per_km($rate_per_km)
+    {
+        if (function_exists('get_instance')) {
+            $CI =& get_instance();
+            if (isset($CI->db) && is_numeric($rate_per_km) && (float)$rate_per_km >= 0) {
+                $val = number_format((float)$rate_per_km, 2, '.', '');
+                $existing = $CI->db->where('key', 'delivery_charge_per_km')->get('settings')->row();
+                if ($existing) {
+                    return $CI->db->where('key', 'delivery_charge_per_km')->update('settings', [
+                        'value' => $val,
+                        'updated_at' => date('Y-m-d H:i:s')
+                    ]);
+                } else {
+                    return $CI->db->insert('settings', [
+                        'key' => 'delivery_charge_per_km',
+                        'value' => $val,
+                        'description' => 'Delivery shipping charge per kilometer (in Rupees)',
+                        'updated_at' => date('Y-m-d H:i:s')
+                    ]);
+                }
+            }
+        }
+        return false;
+    }
+}
+
+if (!function_exists('calculate_delivery_charge_amount')) {
+    /**
+     * Calculate delivery charge based on distance in KM, admin per-KM rate, and delivery type.
+     *
+     * @param float|numeric $distance_km Distance in kilometers
+     * @param string $delivery_type 'normal' or 'urgent'
+     * @return float Calculated delivery charge rounded to 2 decimal places
+     */
+    function calculate_delivery_charge_amount($distance_km, $delivery_type = 'normal')
+    {
+        $rate = get_delivery_charge_per_km();
+        $dist = max(0.0, is_numeric($distance_km) ? (float)$distance_km : 0.0);
+        $base = round($dist * $rate, 2);
+        $extra = ($delivery_type === 'urgent') ? 50.00 : 0.00;
+        return round($base + $extra, 2);
+    }
+}
+
+if (!function_exists('geocode_address_if_needed')) {
+    /**
+     * Ensure coordinates exist for a user address. If missing or 0, attempts geocoding and updates the DB.
+     *
+     * @param object|array $address Address record (passed by reference)
+     * @return array|null ['latitude' => float, 'longitude' => float]
+     */
+    function geocode_address_if_needed(&$address)
+    {
+        if (empty($address)) return null;
+
+        $is_array = is_array($address);
+        $lat = $is_array ? ($address['latitude'] ?? null) : ($address->latitude ?? null);
+        $lon = $is_array ? ($address['longitude'] ?? null) : ($address->longitude ?? null);
+        $address_id = (int)($is_array ? ($address['id'] ?? 0) : ($address->id ?? 0));
+
+        if ($lat !== null && $lon !== null && is_numeric($lat) && is_numeric($lon) && (float)$lat != 0 && (float)$lon != 0) {
+            return [
+                'latitude'  => (float)$lat,
+                'longitude' => (float)$lon
+            ];
+        }
+
+        $line1   = trim((string)($is_array ? ($address['address_line1'] ?? '') : ($address->address_line1 ?? '')));
+        $city    = trim((string)($is_array ? ($address['city'] ?? '') : ($address->city ?? '')));
+        $state   = trim((string)($is_array ? ($address['state'] ?? '') : ($address->state ?? '')));
+        $pincode = trim((string)($is_array ? ($address['pincode'] ?? '') : ($address->pincode ?? '')));
+
+        $queries = [];
+        if (!empty($pincode)) {
+            $queries[] = "{$pincode}, India";
+        }
+        if (!empty($city)) {
+            $queries[] = "{$city}, {$state}, India";
+        }
+        if (!empty($line1) && !empty($city)) {
+            $queries[] = "{$line1}, {$city}, {$pincode}, India";
+        }
+
+        // Try most specific query first
+        $queries = array_reverse($queries);
+
+        foreach ($queries as $q) {
+            $url = "https://nominatim.openstreetmap.org/search?format=json&q=" . urlencode($q) . "&limit=1";
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT_MS, 2500);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 2000);
+            curl_setopt($ch, CURLOPT_USERAGENT, 'RecommApp/1.0 (DeliveryGeoLookup)');
+            $res = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($http_code === 200 && $res) {
+                $data = json_decode($res, true);
+                if (!empty($data) && isset($data[0]['lat']) && isset($data[0]['lon'])) {
+                    $found_lat = round((float)$data[0]['lat'], 8);
+                    $found_lon = round((float)$data[0]['lon'], 8);
+
+                    if ($is_array) {
+                        $address['latitude'] = $found_lat;
+                        $address['longitude'] = $found_lon;
+                    } else {
+                        $address->latitude = $found_lat;
+                        $address->longitude = $found_lon;
+                    }
+
+                    if ($address_id > 0 && function_exists('get_instance')) {
+                        $CI =& get_instance();
+                        if (isset($CI->db)) {
+                            $CI->db->where('id', $address_id)->update('user_addresses', [
+                                'latitude'   => $found_lat,
+                                'longitude'  => $found_lon,
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ]);
+                        }
+                    }
+
+                    return [
+                        'latitude'  => $found_lat,
+                        'longitude' => $found_lon
+                    ];
+                }
+            }
+        }
+
+        return null;
+    }
+}
+
+if (!function_exists('geocode_vendor_if_needed')) {
+    /**
+     * Ensure coordinates exist for a vendor. If missing or 0, attempts geocoding and updates the DB.
+     *
+     * @param object|array $vendor Vendor record (passed by reference)
+     * @return array|null ['latitude' => float, 'longitude' => float]
+     */
+    function geocode_vendor_if_needed(&$vendor)
+    {
+        if (empty($vendor)) return null;
+
+        $is_array = is_array($vendor);
+        $lat = $is_array ? ($vendor['latitude'] ?? null) : ($vendor->latitude ?? null);
+        $lon = $is_array ? ($vendor['longitude'] ?? null) : ($vendor->longitude ?? null);
+        $vendor_id = (int)($is_array ? ($vendor['id'] ?? 0) : ($vendor->id ?? 0));
+
+        if ($lat !== null && $lon !== null && is_numeric($lat) && is_numeric($lon) && (float)$lat != 0 && (float)$lon != 0) {
+            return [
+                'latitude'  => (float)$lat,
+                'longitude' => (float)$lon
+            ];
+        }
+
+        $addr    = trim((string)($is_array ? ($vendor['address'] ?? '') : ($vendor->address ?? '')));
+        $pincode = trim((string)($is_array ? ($vendor['pincode'] ?? '') : ($vendor->pincode ?? '')));
+
+        $queries = [];
+        if (!empty($pincode)) {
+            $queries[] = "{$pincode}, India";
+        }
+        if (!empty($addr)) {
+            $queries[] = "{$addr}, India";
+        }
+
+        $queries = array_reverse($queries);
+
+        foreach ($queries as $q) {
+            $url = "https://nominatim.openstreetmap.org/search?format=json&q=" . urlencode($q) . "&limit=1";
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT_MS, 2500);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, 2000);
+            curl_setopt($ch, CURLOPT_USERAGENT, 'RecommApp/1.0 (VendorGeoLookup)');
+            $res = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($http_code === 200 && $res) {
+                $data = json_decode($res, true);
+                if (!empty($data) && isset($data[0]['lat']) && isset($data[0]['lon'])) {
+                    $found_lat = round((float)$data[0]['lat'], 8);
+                    $found_lon = round((float)$data[0]['lon'], 8);
+
+                    if ($is_array) {
+                        $vendor['latitude'] = $found_lat;
+                        $vendor['longitude'] = $found_lon;
+                    } else {
+                        $vendor->latitude = $found_lat;
+                        $vendor->longitude = $found_lon;
+                    }
+
+                    if ($vendor_id > 0 && function_exists('get_instance')) {
+                        $CI =& get_instance();
+                        if (isset($CI->db)) {
+                            $CI->db->where('id', $vendor_id)->update('users', [
+                                'latitude'   => $found_lat,
+                                'longitude'  => $found_lon
+                            ]);
+                        }
+                    }
+
+                    return [
+                        'latitude'  => $found_lat,
+                        'longitude' => $found_lon
+                    ];
+                }
+            }
+        }
+
+        return null;
+    }
+}
+
 if (!function_exists('format_slot_window_display')) {
     /**
      * Format start and end timestamps/datetimes into a human friendly string (e.g. 'Today, 12:00 PM – 02:00 PM').

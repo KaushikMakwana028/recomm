@@ -68,6 +68,56 @@ class Orders extends MY_Controller
             $address = $this->db->get_where('user_addresses', ['id' => $order->address_id])->row();
         }
 
+        $this->load->helper('distance');
+
+        // Check if distance or delivery charge is missing/zero and can be calculated automatically
+        if (!empty($order->address_id) && !empty($items)) {
+            $first_vendor_id = (int)($items[0]->vendor_id ?? 0);
+            if ($first_vendor_id > 0) {
+                $vendor = $this->db->select('id, address, pincode, latitude, longitude')->get_where('users', ['id' => $first_vendor_id])->row();
+                if ($address) {
+                    geocode_address_if_needed($address);
+                }
+                if ($vendor) {
+                    geocode_vendor_if_needed($vendor);
+                }
+
+                // If order distance or delivery_charge is 0 or null
+                if (($order->distance === null || (float)$order->distance == 0 || (float)$order->delivery_charge == 0) &&
+                    $vendor && $address &&
+                    !empty($vendor->latitude) && !empty($vendor->longitude) &&
+                    !empty($address->latitude) && !empty($address->longitude) &&
+                    (float)$vendor->latitude != 0 && (float)$vendor->longitude != 0 &&
+                    (float)$address->latitude != 0 && (float)$address->longitude != 0) {
+
+                    $resolved = resolve_order_distance($vendor->latitude, $vendor->longitude, $address->latitude, $address->longitude, true);
+                    $new_dist = $resolved['distance_km'];
+                    $new_method = $resolved['method'];
+                    $new_charge = calculate_delivery_charge_amount($new_dist, $order->delivery_type ?: 'normal');
+
+                    $new_option = ($order->delivery_option === 'self' || empty($order->delivery_option)) ? 'delivery_partner' : $order->delivery_option;
+                    $new_total = round((float)$order->subtotal + (float)$order->gst_amount + $new_charge - (float)$order->discount, 2);
+
+                    $this->db->where('id', $id)->update('orders', [
+                        'distance'        => $new_dist,
+                        'distance_km'     => $new_dist,
+                        'distance_method' => $new_method,
+                        'delivery_charge' => $new_charge,
+                        'delivery_option' => $new_option,
+                        'total_amount'    => $new_total,
+                        'updated_at'      => date('Y-m-d H:i:s')
+                    ]);
+
+                    $order->distance        = $new_dist;
+                    $order->distance_km     = $new_dist;
+                    $order->distance_method = $new_method;
+                    $order->delivery_charge = $new_charge;
+                    $order->delivery_option = $new_option;
+                    $order->total_amount    = $new_total;
+                }
+            }
+        }
+
         // Fetch order status history
         $history = $this->db
             ->order_by('created_at', 'DESC')
@@ -85,6 +135,7 @@ class Orders extends MY_Controller
     public function update_status()
     {
         $this->ensure_orders_table();
+        $this->load->helper('distance');
         if ($this->input->method() == 'post') {
             $order_id = $this->post('order_id');
             $status = $this->post('status');
@@ -119,12 +170,7 @@ class Orders extends MY_Controller
 
                 // Calculate delivery charge if distance is set
                 if ($distance !== null && $distance >= 0) {
-                    $base_charge = $distance * 10.00;
-                    if ($delivery_type === 'urgent') {
-                        $delivery_charge = $base_charge + 50.00;
-                    } else {
-                        $delivery_charge = $base_charge;
-                    }
+                    $delivery_charge = calculate_delivery_charge_amount($distance, $delivery_type);
                     $update_fields['delivery_charge'] = $delivery_charge;
                     $update_fields['total_amount'] = floatval($order->subtotal) + floatval($order->gst_amount) + $delivery_charge - floatval($order->discount);
                 } else {
@@ -169,6 +215,9 @@ class Orders extends MY_Controller
         }
         if (!$this->db->field_exists('delivery_type', 'orders')) {
             $this->db->query("ALTER TABLE `orders` ADD COLUMN `delivery_type` VARCHAR(50) DEFAULT 'normal'");
+        }
+        if (!$this->db->field_exists('hidden_by_customer', 'orders')) {
+            $this->db->query("ALTER TABLE `orders` ADD COLUMN `hidden_by_customer` TINYINT(1) NOT NULL DEFAULT 0");
         }
     }
 }

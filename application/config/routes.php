@@ -97,6 +97,20 @@ $route['settings/profile'] = 'profile/index';
 $route['settings/delivery'] = 'settings/index';
 $route['users/login-as-vendor/(:num)'] = 'users/login_as_vendor/$1';
 
+// Legal Pages Management (Admin)
+$route['legal-pages'] = 'legal_pages/index';
+$route['legal-pages/edit/(:any)'] = 'legal_pages/edit/$1';
+$route['legal-pages/save/(:any)'] = 'legal_pages/save/$1';
+$route['legal-pages/get-default/(:any)'] = 'legal_pages/get_default/$1';
+$route['legal-pages/save-draft/(:any)'] = 'legal_pages/save_draft/$1';
+$route['legal-pages/preview-default/(:any)'] = 'legal_pages/preview_default/$1';
+$route['legal-pages/reset-default/(:any)'] = 'legal_pages/reset_to_default/$1';
+$route['legal-pages/publish/(:any)'] = 'legal_pages/publish/$1';
+
+// Public Legal Pages API (Vendor & Customer)
+$route['api/legal_page/(:any)'] = 'api/legal_page/$1';
+$route['api/user/legal_page/(:any)'] = 'user/api/legal_page/$1';
+
 
 
 
@@ -122,6 +136,9 @@ $route['api/get_vendor_orders'] = 'api/get_vendor_orders';
 $route['api/update_vendor_order_status'] = 'api/update_vendor_order_status';
 $route['api/order_invoice/(:num)'] = 'api/order_invoice/$1';
 $route['api/get_vendor_stats'] = 'api/get_vendor_stats';
+$route['api/get_vendor_dashboard'] = 'api/get_vendor_dashboard';
+$route['api/user/get_vendor_dashboard'] = 'user/api/get_vendor_dashboard';
+$route['api/user/get_vendor_stats'] = 'user/api/get_vendor_stats';
 $route['api/get_customer'] = 'api/get_customer';
 $route['api/get_report'] = 'api/get_report';
 
@@ -179,6 +196,7 @@ $route['api/user/get_orders'] = 'user/api/get_orders';
 $route['api/user/get_order_details'] = 'user/api/get_order_details';
 $route['api/user/get_order_details/(:num)'] = 'user/api/get_order_details/$1';
 $route['api/user/cancel_order'] = 'user/api/cancel_order';
+$route['api/user/hide_order'] = 'user/api/hide_order';
 
 // Vendor Orders API Routes
 $route['api/user/get_vendor_orders'] = 'user/api/get_vendor_orders';

@@ -12,7 +12,7 @@
                 </p>
 
                 <form action="<?= base_url('settings/delivery') ?>" method="POST">
-                    <div class="mb-3">
+                    <div class="mb-4">
                         <label for="delivery_radius_km" class="form-label fw-semibold">
                             Maximum Delivery Radius (km) <span class="text-danger">*</span>
                         </label>
@@ -33,9 +33,31 @@
                         </div>
                     </div>
 
+                    <div class="mb-4">
+                        <label for="delivery_charge_per_km" class="form-label fw-semibold">
+                            Delivery Charge per KM (₹) <span class="text-danger">*</span>
+                        </label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light text-muted">₹</span>
+                            <input type="number" 
+                                   step="0.5" 
+                                   min="0" 
+                                   max="500" 
+                                   class="form-control form-control-lg" 
+                                   id="delivery_charge_per_km" 
+                                   name="delivery_charge_per_km" 
+                                   value="<?= set_value('delivery_charge_per_km', $delivery_charge_per_km) ?>" 
+                                   required>
+                            <span class="input-group-text bg-light text-muted">per KM</span>
+                        </div>
+                        <div class="form-text mt-2 text-muted">
+                            Distance in KM between vendor shop & customer address is multiplied by this rate. Current rate: <strong>₹<?= number_format($delivery_charge_per_km, 2) ?>/km</strong>.
+                        </div>
+                    </div>
+
                     <div class="d-flex justify-content-end mt-4">
                         <button type="submit" class="btn btn-primary px-4 py-2 fw-semibold">
-                            <i class="fas fa-save me-1"></i> Save Setting
+                            <i class="fas fa-save me-1"></i> Save Settings
                         </button>
                     </div>
                 </form>
