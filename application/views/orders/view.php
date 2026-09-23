@@ -782,35 +782,65 @@
                     <h3>Delivery Details</h3>
                 </div>
                 <div class="rc-meta-item">
-                    <div class="rc-meta-icon"><i class="fas fa-truck"></i></div>
+                    <div class="rc-meta-icon"><i class="fas fa-clock"></i></div>
                     <div class="rc-meta-content">
-                        <span class="rc-meta-label">Delivery Option</span>
-                        <span class="rc-meta-value"><?= htmlspecialchars($order->delivery_option ? ($order->delivery_option == 'self' ? 'By Self' : 'Delivery Partner') : '-') ?></span>
+                        <span class="rc-meta-label">Delivery Time Slot</span>
+                        <span class="rc-meta-value">
+                            <?php 
+                                $slot_key = !empty($order->chosen_time_option) ? strtolower($order->chosen_time_option) : ($order->delivery_type == 'urgent' ? 'immediately' : 'immediately');
+                                $slot_labels = [
+                                    'immediately' => ['label' => '⚡ Immediately', 'class' => 'bg-danger'],
+                                    'later'       => ['label' => '🕒 Later (3-4 hrs)', 'class' => 'bg-info'],
+                                    'lunch'       => ['label' => '🍱 Lunch Delivery', 'class' => 'bg-warning text-dark'],
+                                    'dinner'      => ['label' => '🌙 Dinner Delivery', 'class' => 'bg-secondary'],
+                                    'custom'      => ['label' => '📅 Custom Slot', 'class' => 'bg-primary'],
+                                ];
+                                $slot_info = $slot_labels[$slot_key] ?? ['label' => ucfirst($slot_key), 'class' => 'bg-primary'];
+                            ?>
+                            <span class="badge <?= $slot_info['class'] ?> px-2 py-1">
+                                <?= htmlspecialchars($slot_info['label']) ?>
+                            </span>
+                            <?php if (!empty($order->custom_delivery_time)): ?>
+                                <small class="d-block text-muted mt-1">Requested: <?= htmlspecialchars($order->custom_delivery_time) ?></small>
+                            <?php elseif (!empty($order->estimated_window_start) && !empty($order->estimated_window_end)): ?>
+                                <small class="d-block text-muted mt-1">Window: <?= date('h:i A', strtotime($order->estimated_window_start)) ?> - <?= date('h:i A', strtotime($order->estimated_window_end)) ?></small>
+                            <?php endif; ?>
+                        </span>
                     </div>
                 </div>
                 <div class="rc-meta-item">
                     <div class="rc-meta-icon"><i class="fas fa-route"></i></div>
                     <div class="rc-meta-content">
-                        <span class="rc-meta-label">Distance</span>
-                        <span class="rc-meta-value"><?= $order->distance !== null ? htmlspecialchars($order->distance) . ' KM' : '-' ?></span>
-                    </div>
-                </div>
-                <div class="rc-meta-item">
-                    <div class="rc-meta-icon"><i class="fas fa-tachometer-alt"></i></div>
-                    <div class="rc-meta-content">
-                        <span class="rc-meta-label">Delivery Type</span>
+                        <span class="rc-meta-label">Distance &amp; Rate</span>
                         <span class="rc-meta-value">
-                            <span class="badge bg-<?= ($order->delivery_type == 'urgent') ? 'danger' : 'info' ?>">
-                                <?= htmlspecialchars(ucfirst($order->delivery_type ?: 'normal')) ?> Delivery
-                            </span>
+                            <?php 
+                                $act_dist = $delivery_breakdown['actual_distance_km'] ?? ($order->distance !== null ? (float)$order->distance : 0.0);
+                                $bill_km = $delivery_breakdown['billed_distance_km'] ?? (($act_dist < 1.0) ? 1 : max(1, (int)round($act_dist)));
+                                $rate_km = $delivery_breakdown['rate_per_km'] ?? 10.0;
+                            ?>
+                            <?= htmlspecialchars($act_dist) ?> KM 
+                            <small class="text-muted">(Billed: <?= $bill_km ?> KM @ ₹<?= number_format($rate_km, 2) ?>/km)</small>
                         </span>
                     </div>
                 </div>
+                <?php if (!empty($delivery_breakdown['is_immediate']) && ($delivery_breakdown['extra_charge'] ?? 0) > 0): ?>
+                <div class="rc-meta-item">
+                    <div class="rc-meta-icon"><i class="fas fa-bolt text-warning"></i></div>
+                    <div class="rc-meta-content">
+                        <span class="rc-meta-label">Immediate Surcharge</span>
+                        <span class="rc-meta-value text-danger font-weight-bold">
+                            + ₹<?= number_format($delivery_breakdown['extra_charge'], 2) ?>
+                        </span>
+                    </div>
+                </div>
+                <?php endif; ?>
                 <div class="rc-meta-item">
                     <div class="rc-meta-icon"><i class="fas fa-rupee-sign"></i></div>
                     <div class="rc-meta-content">
-                        <span class="rc-meta-label">Delivery Charge</span>
-                        <span class="rc-meta-value" style="font-weight: 700;">₹<?= number_format($order->delivery_charge ?: 0, 2) ?></span>
+                        <span class="rc-meta-label">Total Delivery Charge</span>
+                        <span class="rc-meta-value" style="font-weight: 700; color: #166534;">
+                            ₹<?= number_format($order->delivery_charge ?: 0, 2) ?>
+                        </span>
                     </div>
                 </div>
             </div>
@@ -835,23 +865,8 @@
                         </select>
                     </div>
                     <div class="rc-form-group">
-                        <label class="rc-form-label" for="delivery-option-select">Delivery Option</label>
-                        <select name="delivery_option" id="delivery-option-select" class="rc-select">
-                            <option value="">-- Select Option --</option>
-                            <option value="self" <?= ($order->delivery_option == 'self') ? 'selected' : '' ?>>By Self</option>
-                            <option value="delivery_partner" <?= ($order->delivery_option == 'delivery_partner') ? 'selected' : '' ?>>Delivery Partner</option>
-                        </select>
-                    </div>
-                    <div class="rc-form-group">
                         <label class="rc-form-label" for="distance-input">Distance (in KM)</label>
                         <input type="number" step="0.1" name="distance" id="distance-input" class="rc-select" value="<?= htmlspecialchars($order->distance ?: '') ?>" placeholder="e.g. 5.5">
-                    </div>
-                    <div class="rc-form-group">
-                        <label class="rc-form-label" for="delivery-type-select">Delivery Type</label>
-                        <select name="delivery_type" id="delivery-type-select" class="rc-select">
-                            <option value="normal" <?= ($order->delivery_type == 'normal') ? 'selected' : '' ?>>Normal Delivery</option>
-                            <option value="urgent" <?= ($order->delivery_type == 'urgent') ? 'selected' : '' ?>>Urgent Delivery</option>
-                        </select>
                     </div>
                     <div class="rc-form-group">
                         <label class="rc-form-label" for="remarks-textarea">Remarks / Update Notes</label>

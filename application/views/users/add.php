@@ -392,16 +392,143 @@
                     <?= form_error('email', '<small class="text-danger mt-1 d-block">', '</small>') ?>
                 </div>
 
-                <!-- Vendor Only: Store Name -->
-                <div class="rc-form-group d-none" id="store_name_field">
-                    <label for="store_name" class="rc-form-label">Store Name *</label>
-                    <input type="text" class="rc-form-control" id="store_name" name="store_name" 
-                           value="<?= set_value('store_name') ?>" placeholder="e.g. Green Valley Organics">
-                    <?= form_error('store_name', '<small class="text-danger mt-1 d-block">', '</small>') ?>
-                    <small class="text-muted mt-1 d-block">
-                        <i class="fas fa-info-circle me-1"></i>
-                        The vendor can update other store details from their vendor panel.
-                    </small>
+                <!-- Vendor Only: Store & Bank Details -->
+                <div class="d-none" id="vendor_fields">
+                    <div class="border-top pt-3 mt-3 mb-3">
+                        <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--rc-forest-900); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fas fa-store text-success"></i> Store Information
+                        </h4>
+                        <p class="text-muted small mb-3">Enter the vendor's store operational details, location, and contact information.</p>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="store_name" class="rc-form-label">Store Name <span class="text-danger">*</span></label>
+                            <input type="text" class="rc-form-control" id="store_name" name="store_name" 
+                                   value="<?= set_value('store_name') ?>" placeholder="e.g. Green Valley Organics">
+                            <?= form_error('store_name', '<small class="text-danger mt-1 d-block">', '</small>') ?>
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="owner_name" class="rc-form-label">Owner Name</label>
+                            <input type="text" class="rc-form-control" id="owner_name" name="owner_name" 
+                                   value="<?= set_value('owner_name') ?>" placeholder="e.g. John Doe">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="contact_number" class="rc-form-label">Store Contact Number</label>
+                            <input type="text" class="rc-form-control" id="contact_number" name="contact_number" 
+                                   value="<?= set_value('contact_number') ?>" placeholder="e.g. 9876543210">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="gst_number" class="rc-form-label">GST Number (Optional)</label>
+                            <input type="text" class="rc-form-control" id="gst_number" name="gst_number" 
+                                   value="<?= set_value('gst_number') ?>" placeholder="e.g. 27AAPFU0939F1ZV">
+                        </div>
+                    </div>
+
+                    <div class="rc-form-group">
+                        <label for="vendor_address" class="rc-form-label">Store Address</label>
+                        <textarea class="rc-form-control" id="vendor_address" name="address" 
+                                  rows="2" placeholder="Full physical shop address..."><?= set_value('address') ?></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 rc-form-group">
+                            <label for="pincode" class="rc-form-label">Pincode</label>
+                            <input type="text" class="rc-form-control" id="pincode" name="pincode" 
+                                   value="<?= set_value('pincode') ?>" placeholder="e.g. 380001">
+                        </div>
+                        <div class="col-md-4 rc-form-group">
+                            <label for="latitude" class="rc-form-label">Latitude</label>
+                            <input type="text" class="rc-form-control" id="latitude" name="latitude" 
+                                   value="<?= set_value('latitude') ?>" placeholder="e.g. 23.079496">
+                        </div>
+                        <div class="col-md-4 rc-form-group">
+                            <label for="longitude" class="rc-form-label">Longitude</label>
+                            <input type="text" class="rc-form-control" id="longitude" name="longitude" 
+                                   value="<?= set_value('longitude') ?>" placeholder="e.g. 72.672547">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="opening_time" class="rc-form-label">Opening Time</label>
+                            <input type="time" class="rc-form-control" id="opening_time" name="opening_time" 
+                                   value="<?= set_value('opening_time') ?>">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="closing_time" class="rc-form-label">Closing Time</label>
+                            <input type="time" class="rc-form-control" id="closing_time" name="closing_time" 
+                                   value="<?= set_value('closing_time') ?>">
+                        </div>
+                    </div>
+
+                    <div class="rc-form-group">
+                        <label for="store_photo" class="rc-form-label">Store Banner Photo</label>
+                        <input type="file" class="rc-form-control" id="store_photo" name="store_photo" 
+                               accept="image/*" onchange="previewStorePhoto(this)">
+                        <small class="text-muted mt-1 d-block">Allowed: JPG, PNG, WEBP. Max: 5MB</small>
+                        <div id="storePhotoPreview" class="mt-2" style="display: none;">
+                            <img id="preview_store" src="" alt="Store Photo Preview" 
+                                 style="max-width: 100%; height: 120px; object-fit: cover; border-radius: 8px; border: 1px solid var(--rc-line);">
+                        </div>
+                    </div>
+
+                    <!-- Bank Details Sub-section -->
+                    <div class="border-top pt-3 mt-3 mb-3">
+                        <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--rc-forest-900); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fas fa-university text-primary"></i> Bank & Payout Details
+                        </h4>
+                        <p class="text-muted small mb-3">Bank account information for order payouts and settlements.</p>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="account_holder_name" class="rc-form-label">Account Holder Name</label>
+                            <input type="text" class="rc-form-control" id="account_holder_name" name="account_holder_name" 
+                                   value="<?= set_value('account_holder_name') ?>" placeholder="e.g. Makwana Kaushik">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="bank_name" class="rc-form-label">Bank Name</label>
+                            <input type="text" class="rc-form-control" id="bank_name" name="bank_name" 
+                                   value="<?= set_value('bank_name') ?>" placeholder="e.g. State Bank of India">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="account_number" class="rc-form-label">Account Number</label>
+                            <input type="text" class="rc-form-control" id="account_number" name="account_number" 
+                                   value="<?= set_value('account_number') ?>" placeholder="e.g. 123456789012">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="ifsc_code" class="rc-form-label">IFSC Code</label>
+                            <input type="text" class="rc-form-control" id="ifsc_code" name="ifsc_code" 
+                                   value="<?= set_value('ifsc_code') ?>" placeholder="e.g. SBIN0001234">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="account_type" class="rc-form-label">Account Type</label>
+                            <select class="rc-form-control" id="account_type" name="account_type">
+                                <option value="">Select Account Type</option>
+                                <option value="savings" <?= set_select('account_type', 'savings') ?>>Savings Account</option>
+                                <option value="current" <?= set_select('account_type', 'current') ?>>Current Account</option>
+                                <option value="business" <?= set_select('account_type', 'business') ?>>Business Account</option>
+                                <option value="cash_credit" <?= set_select('account_type', 'cash_credit') ?>>Cash Credit</option>
+                                <option value="overdraft" <?= set_select('account_type', 'overdraft') ?>>Overdraft</option>
+                                <option value="joint" <?= set_select('account_type', 'joint') ?>>Joint Account</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="branch_name" class="rc-form-label">Branch Name</label>
+                            <input type="text" class="rc-form-control" id="branch_name" name="branch_name" 
+                                   value="<?= set_value('branch_name') ?>" placeholder="e.g. Navrangpura Branch">
+                        </div>
+                    </div>
                 </div>
 
                 <!-- User Only: Address -->
@@ -511,6 +638,17 @@ function previewImage(input) {
     }
 }
 
+function previewStorePhoto(input) {
+    if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            document.getElementById('preview_store').src = e.target.result;
+            document.getElementById('storePhotoPreview').style.display = 'block';
+        }
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+
 $(document).ready(function() {
     // Handle role card click & changes
     $('.role-radio').change(function() {
@@ -520,7 +658,7 @@ $(document).ready(function() {
         $('.rc-role-card').removeClass('active-admin active-vendor active-user');
         
         // Hide conditional sections and info
-        $('#store_name_field, #address_field').addClass('d-none');
+        $('#vendor_fields, #address_field').addClass('d-none');
         $('.role-info').addClass('d-none');
         $('#info_default').hide();
 
@@ -530,7 +668,7 @@ $(document).ready(function() {
             $('#info_admin').removeClass('d-none');
         } else if (role === 'vendor') {
             $('#label_vendor').addClass('active-vendor');
-            $('#store_name_field').removeClass('d-none');
+            $('#vendor_fields').removeClass('d-none');
             $('#info_vendor').removeClass('d-none');
         } else if (role === 'user') {
             $('#label_user').addClass('active-user');

@@ -170,10 +170,19 @@ if (!function_exists('render_order_invoice_html')) {
             $p_line = number_format($line_total, 2);
             $bg = ($idx % 2 === 0) ? '#f7f9fc' : '#ffffff';
 
+            $store_subtext = '';
+            if (!empty($item->vendor_id)) {
+                $v_info = $CI->db->select('store_name, name')->get_where('users', ['id' => $item->vendor_id])->row();
+                if ($v_info) {
+                    $sname = !empty($v_info->store_name) ? $v_info->store_name : $v_info->name;
+                    $store_subtext = "<br><span style='font-size: 8.5px; color: #5a6b82; font-weight: normal;'>Store: " . htmlspecialchars($sname) . "</span>";
+                }
+            }
+
             $items_rows .= "
                 <tr style='background-color: {$bg};'>
                     <td style='padding: 8px; border-bottom: 1px solid #e4e9f0; text-align: center; color: #8a94a6; font-size: 9.5px;'>{$idx}</td>
-                    <td style='padding: 8px; border-bottom: 1px solid #e4e9f0; font-weight: bold; color: #0b1f45; font-size: 10.5px;'>{$p_name}</td>
+                    <td style='padding: 8px; border-bottom: 1px solid #e4e9f0; font-weight: bold; color: #0b1f45; font-size: 10.5px;'>{$p_name}{$store_subtext}</td>
                     <td style='padding: 8px; border-bottom: 1px solid #e4e9f0; text-align: center; color: #3a4256; font-size: 10px;'>{$p_qty}</td>
                     <td style='padding: 8px; border-bottom: 1px solid #e4e9f0; text-align: right; color: #3a4256; font-size: 10px;'>&#8377; {$p_price}</td>
                     <td style='padding: 8px; border-bottom: 1px solid #e4e9f0; text-align: right; color: #3a4256; font-size: 10px;'>&#8377; {$p_taxable}</td>

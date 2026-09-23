@@ -23,6 +23,8 @@ class Api extends CI_Controller
     {
         parent::__construct();
 
+        date_default_timezone_set('Asia/Kolkata');
+
         // =========================
         // LOAD LIBRARIES / HELPERS
         // =========================
@@ -484,7 +486,7 @@ class Api extends CI_Controller
         }
 
         $user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, latitude, longitude, opening_time, closing_time, is_holiday, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, latitude, longitude, opening_time, closing_time, delivery_radius, is_holiday, store_status, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
             ->where('id', $id)
             ->get('users')
             ->row();
@@ -508,6 +510,12 @@ class Api extends CI_Controller
             ]));
         }
 
+        $this->load->helper('distance');
+        $admin_max_delivery_radius = (float)get_delivery_radius_km();
+        $vendor_delivery_radius = (isset($user->delivery_radius) && $user->delivery_radius !== null && (float)$user->delivery_radius > 0)
+            ? min((float)$user->delivery_radius, $admin_max_delivery_radius)
+            : min(5.0, $admin_max_delivery_radius);
+
         return $this->output->set_status_header(200)->set_output(json_encode([
             'status' => true,
             'code' => 200,
@@ -527,7 +535,10 @@ class Api extends CI_Controller
                 'longitude' => $user->longitude !== null ? (float)$user->longitude : null,
                 'opening_time' => $user->opening_time,
                 'closing_time' => $user->closing_time,
+                'delivery_radius' => $vendor_delivery_radius,
+                'admin_delivery_radius_km' => $admin_max_delivery_radius,
                 'is_holiday' => (int)$user->is_holiday,
+                'store_status' => $user->store_status ?? 'open',
                 'prep_time_minutes' => isset($user->prep_time_minutes) ? (int)$user->prep_time_minutes : 30,
                 'lunch_window_start' => !empty($user->lunch_window_start) ? $user->lunch_window_start : '12:00:00',
                 'lunch_window_end' => !empty($user->lunch_window_end) ? $user->lunch_window_end : '14:00:00',
@@ -656,6 +667,10 @@ class Api extends CI_Controller
         }
 
         $input_json = json_decode($this->input->raw_input_stream, true) ?: [];
+        $status_val = $this->input->post('store_status') !== null ? $this->input->post('store_status') : ($input_json['store_status'] ?? null);
+        if ($status_val !== null && in_array(strtolower((string)$status_val), ['open', 'closed'], true)) {
+            $update_data['store_status'] = strtolower((string)$status_val);
+        }
         $lat_val = $this->input->post('latitude') !== null ? $this->input->post('latitude') : ($input_json['latitude'] ?? null);
         $lon_val = $this->input->post('longitude') !== null ? $this->input->post('longitude') : ($input_json['longitude'] ?? null);
 
@@ -664,6 +679,17 @@ class Api extends CI_Controller
         }
         if ($lon_val !== null && $lon_val !== '') {
             $update_data['longitude'] = is_numeric($lon_val) ? floatval($lon_val) : null;
+        }
+
+        // Delivery radius setting
+        $radius_val = $this->input->post('delivery_radius') !== null ? $this->input->post('delivery_radius') : ($this->input->post('deliveryRadius') !== null ? $this->input->post('deliveryRadius') : ($input_json['delivery_radius'] ?? ($input_json['deliveryRadius'] ?? null)));
+        if ($radius_val !== null && $radius_val !== '' && is_numeric($radius_val)) {
+            $this->load->helper('distance');
+            $admin_max_radius = (float)get_delivery_radius_km();
+            $val = floatval($radius_val);
+            if ($val > 0) {
+                $update_data['delivery_radius'] = min($val, $admin_max_radius);
+            }
         }
 
         // Preparation time and delivery window settings
@@ -830,10 +856,16 @@ class Api extends CI_Controller
 
         // Get updated user
         $updated_user = $this->db
-            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, latitude, longitude, opening_time, closing_time, is_holiday, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
+            ->select('id, name, mobile, email, store_name, owner_name, gst_number, contact_number, address, pincode, latitude, longitude, opening_time, closing_time, delivery_radius, is_holiday, store_status, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, profile_image, store_photo, role, is_active, created_on, account_holder_name, bank_name, account_number, ifsc_code, account_type, branch_name')
             ->where('id', $user_id)
             ->get('users')
             ->row();
+
+        $this->load->helper('distance');
+        $admin_max_delivery_radius = (float)get_delivery_radius_km();
+        $vendor_delivery_radius = (isset($updated_user->delivery_radius) && $updated_user->delivery_radius !== null && (float)$updated_user->delivery_radius > 0)
+            ? min((float)$updated_user->delivery_radius, $admin_max_delivery_radius)
+            : min(5.0, $admin_max_delivery_radius);
 
         // Success response
         return $this->output
@@ -847,7 +879,10 @@ class Api extends CI_Controller
                     'name' => $updated_user->name,
                     'mobile' => $updated_user->mobile,
                     'email' => $updated_user->email,
+                    'shop_name' => $updated_user->store_name,
                     'store_name' => $updated_user->store_name,
+                    'delivery_radius' => $vendor_delivery_radius,
+                    'admin_delivery_radius_km' => $admin_max_delivery_radius,
                     'owner_name' => $updated_user->owner_name,
                     'gst_number' => $updated_user->gst_number,
                     'contact_number' => $updated_user->contact_number,
@@ -858,6 +893,7 @@ class Api extends CI_Controller
                     'opening_time' => $updated_user->opening_time,
                     'closing_time' => $updated_user->closing_time,
                     'is_holiday' => (int)$updated_user->is_holiday,
+                    'store_status' => $updated_user->store_status ?? 'open',
                     'prep_time_minutes' => isset($updated_user->prep_time_minutes) ? (int)$updated_user->prep_time_minutes : 30,
                     'lunch_window_start' => !empty($updated_user->lunch_window_start) ? $updated_user->lunch_window_start : '12:00:00',
                     'lunch_window_end' => !empty($updated_user->lunch_window_end) ? $updated_user->lunch_window_end : '14:00:00',
@@ -981,10 +1017,18 @@ class Api extends CI_Controller
         // ====================================
         if ($type === 'vendor') {
 
-            $this->db->select('vp.*, p.image as admin_image, c.name as category_name');
+            $this->db->select('vp.*, 
+                COALESCE(NULLIF(vp.brand, ""), p.brand, "") as brand,
+                COALESCE(NULLIF(vp.description, ""), p.description, "") as description,
+                COALESCE(NULLIF(vp.unit, ""), pv.variant_name, "piece") as unit,
+                p.image as admin_image, 
+                c.name as category_name,
+                pv.variant_name,
+                pv.sku as variant_sku');
             $this->db->from('vendor_products vp');
             $this->db->join('products p', 'p.id = vp.product_id', 'left');
             $this->db->join('categories c', 'c.id = vp.category_id', 'left');
+            $this->db->join('product_variants pv', 'pv.id = vp.variant_id', 'left');
             $this->db->where('vp.vendor_id', $vendor_id);
             $this->db->where('vp.is_active', 1);
 
@@ -993,6 +1037,7 @@ class Api extends CI_Controller
                 $this->db->group_start();
                 $this->db->like('vp.product_name', $search);
                 $this->db->or_like('vp.brand', $search);
+                $this->db->or_like('p.brand', $search);
                 $this->db->or_like('vp.description', $search);
                 $this->db->group_end();
             }
@@ -1023,17 +1068,21 @@ class Api extends CI_Controller
                 $data[] = [
                     'id' => (int)$product->id,
                     'product_id' => $product->product_id ? (int)$product->product_id : null,
+                    'variant_id' => $product->variant_id ? (int)$product->variant_id : null,
                     'product_name' => $product->product_name,
-                    'brand' => $product->brand,
+                    'brand' => $product->brand ?? '',
                     'category_id' => (int)$product->category_id,
                     'category_name' => $product->category_name,
-                    'unit' => $product->unit,
+                    'unit' => $product->unit ?? 'piece',
+                    'variant_name' => $product->variant_name,
+                    'variant_sku' => $product->variant_sku,
                     'mrp' => (float)$product->mrp,
                     'selling_price' => (float)$product->selling_price,
                     'stock' => (int)$product->stock,
-                    'description' => $product->description,
+                    'description' => $product->description ?? '',
                     'image' => $product_image,
                     'is_own_product' => $product->product_id === null,
+                    'temporarily_unavailable' => (int)($product->temporarily_unavailable ?? 0),
                     'added_on' => $product->added_on
                 ];
             }
@@ -1053,7 +1102,7 @@ class Api extends CI_Controller
         // ====================================
         else {
 
-            $this->db->select('p.id, p.name, p.slug, p.description, p.image, p.price, p.sale_price, p.sku, p.category_id, c.name as category_name');
+            $this->db->select('p.id, p.name, p.slug, p.brand, p.description, p.image, p.price, p.sale_price, p.sku, p.category_id, c.name as category_name');
             $this->db->from('products p');
             $this->db->join('categories c', 'c.id = p.category_id', 'left');
             $this->db->where('p.is_active', 1);
@@ -1063,6 +1112,7 @@ class Api extends CI_Controller
             if (!empty($search)) {
                 $this->db->group_start();
                 $this->db->like('p.name', $search);
+                $this->db->or_like('p.brand', $search);
                 $this->db->or_like('p.sku', $search);
                 $this->db->or_like('p.description', $search);
                 $this->db->group_end();
@@ -1082,17 +1132,41 @@ class Api extends CI_Controller
             // Format response
             $data = [];
             foreach ($products as $product) {
+                // Fetch active variants for this product
+                $variants_query = $this->db
+                    ->select('id, variant_name, sku, mrp, price, image')
+                    ->where('product_id', $product->id)
+                    ->where('is_active', 1)
+                    ->order_by('id', 'ASC')
+                    ->get('product_variants')
+                    ->result();
+
+                $variants = [];
+                foreach ($variants_query as $v) {
+                    $variants[] = [
+                        'id' => (int)$v->id,
+                        'variant_name' => $v->variant_name,
+                        'sku' => $v->sku,
+                        'mrp' => (float)$v->mrp,
+                        'price' => (float)$v->price,
+                        'image' => $v->image ? base_url($v->image) : null
+                    ];
+                }
+
                 $data[] = [
                     'id' => (int)$product->id,
                     'name' => $product->name,
                     'slug' => $product->slug,
-                    'description' => $product->description,
+                    'brand' => $product->brand ?? '',
+                    'unit' => $product->unit ?? '',
+                    'description' => $product->description ?? '',
                     'image' => $product->image ? base_url($product->image) : null,
                     'price' => (float)$product->price,
                     'sale_price' => $product->sale_price ? (float)$product->sale_price : null,
                     'sku' => $product->sku,
                     'category_id' => (int)$product->category_id,
-                    'category_name' => $product->category_name
+                    'category_name' => $product->category_name,
+                    'variants' => $variants
                 ];
             }
 
@@ -1149,10 +1223,18 @@ class Api extends CI_Controller
 
         // Get product details
         $product = $this->db
-            ->select('vp.*, p.image as admin_image, c.name as category_name')
+            ->select('vp.*, 
+                COALESCE(NULLIF(vp.brand, ""), p.brand, "") as brand,
+                COALESCE(NULLIF(vp.description, ""), p.description, "") as description,
+                COALESCE(NULLIF(vp.unit, ""), pv.variant_name, "piece") as unit,
+                p.image as admin_image, 
+                c.name as category_name,
+                pv.variant_name,
+                pv.sku as variant_sku')
             ->from('vendor_products vp')
             ->join('products p', 'p.id = vp.product_id', 'left')
             ->join('categories c', 'c.id = vp.category_id', 'left')
+            ->join('product_variants pv', 'pv.id = vp.variant_id', 'left')
             ->where('vp.id', $id)
             ->where('vp.vendor_id', $vendor_id)
             ->get()
@@ -1186,19 +1268,23 @@ class Api extends CI_Controller
         $data = [
             'id' => (int)$product->id,
             'product_id' => $product->product_id ? (int)$product->product_id : null,
+            'variant_id' => $product->variant_id ? (int)$product->variant_id : null,
             'product_name' => $product->product_name,
-            'brand' => $product->brand,
+            'brand' => $product->brand ?? '',
             'category_id' => (int)$product->category_id,
             'category_name' => $product->category_name,
-            'unit' => $product->unit,
+            'unit' => $product->unit ?? 'piece',
+            'variant_name' => $product->variant_name,
+            'variant_sku' => $product->variant_sku,
             'mrp' => (float)$product->mrp,
             'selling_price' => (float)$product->selling_price,
             'stock' => (int)$product->stock,
-            'description' => $product->description,
+            'description' => $product->description ?? '',
             'image' => $product_image,
             'is_active' => (int)$product->is_active,
             'is_own' => $is_own,
             'can_edit_image' => $is_own,
+            'temporarily_unavailable' => (int)($product->temporarily_unavailable ?? 0),
             'added_on' => $product->added_on,
             'updated_on' => $product->updated_on
         ];
@@ -1244,62 +1330,19 @@ class Api extends CI_Controller
 
         // Get form data
         $product_id = $this->input->post('product_id'); // If selecting admin product
-        $product_name = trim($this->input->post('product_name'));
-        $brand = trim($this->input->post('brand'));
+        $variant_id = $this->input->post('variant_id'); // If selecting admin product variant
+        $product_name = trim($this->input->post('product_name') ?? '');
+        $brand = trim($this->input->post('brand') ?? '');
         $category_id = $this->input->post('category_id');
-        $unit = trim($this->input->post('unit'));
+        $unit = trim($this->input->post('unit') ?? '');
         $mrp = $this->input->post('mrp');
         $selling_price = $this->input->post('selling_price');
         $stock = $this->input->post('stock');
+        $temporarily_unavailable = $this->input->post('temporarily_unavailable');
+        $temp_unavail = ($temporarily_unavailable === '1' || $temporarily_unavailable === 1 || $temporarily_unavailable === 'true' || $temporarily_unavailable === true) ? 1 : 0;
         $description = trim($this->input->post('description') ?? '');
 
-
-        // Basic validation
-        if (empty($product_name)) {
-            return $this->output
-                ->set_status_header(422)
-                ->set_output(json_encode([
-                    'status' => false,
-                    'code' => 422,
-                    'message' => 'Product name is required',
-                    'data' => null
-                ]));
-        }
-
-        if (empty($category_id)) {
-            return $this->output
-                ->set_status_header(422)
-                ->set_output(json_encode([
-                    'status' => false,
-                    'code' => 422,
-                    'message' => 'Category is required',
-                    'data' => null
-                ]));
-        }
-
-        if (empty($mrp) || $mrp <= 0) {
-            return $this->output
-                ->set_status_header(422)
-                ->set_output(json_encode([
-                    'status' => false,
-                    'code' => 422,
-                    'message' => 'MRP is required',
-                    'data' => null
-                ]));
-        }
-
-        if (empty($selling_price) || $selling_price <= 0) {
-            return $this->output
-                ->set_status_header(422)
-                ->set_output(json_encode([
-                    'status' => false,
-                    'code' => 422,
-                    'message' => 'Selling price is required',
-                    'data' => null
-                ]));
-        }
-
-        // CASE 1: Vendor selecting admin product
+        // CASE 1: Vendor selecting admin product from catalogue
         if (!empty($product_id)) {
 
             // Check if admin product exists
@@ -1316,17 +1359,98 @@ class Api extends CI_Controller
                     ->set_output(json_encode([
                         'status' => false,
                         'code' => 404,
-                        'message' => 'Product not found',
+                        'message' => 'Product not found in master catalogue',
                         'data' => null
                     ]));
             }
 
-            // Check if vendor already added this product
-            $existing = $this->db
-                ->where('vendor_id', $vendor_id)
-                ->where('product_id', $product_id)
-                ->get('vendor_products')
-                ->row();
+            // Check if specific variant is requested
+            $admin_variant = null;
+            if (!empty($variant_id)) {
+                $admin_variant = $this->db
+                    ->where('id', $variant_id)
+                    ->where('product_id', $product_id)
+                    ->where('is_active', 1)
+                    ->get('product_variants')
+                    ->row();
+            }
+
+            // Auto-fill omitted fields from admin product and variant
+            if (empty($product_name)) {
+                $product_name = $admin_product->name;
+            }
+            if (empty($brand)) {
+                $brand = $admin_product->brand ?? '';
+            }
+            if (empty($category_id)) {
+                $category_id = $admin_product->category_id;
+            }
+            if (empty($unit)) {
+                $unit = $admin_variant ? $admin_variant->variant_name : ($admin_product->unit ?: 'piece');
+            }
+            if (empty($mrp) || $mrp <= 0) {
+                $mrp = $admin_variant && $admin_variant->mrp > 0 ? $admin_variant->mrp : $admin_product->price;
+            }
+            if (empty($selling_price) || $selling_price <= 0) {
+                $selling_price = $admin_variant && $admin_variant->price > 0 ? $admin_variant->price : ($admin_product->sale_price ?: $admin_product->price);
+            }
+            if (empty($description)) {
+                $description = $admin_product->description ?? '';
+            }
+
+            // Validation after auto-fill
+            if (empty($product_name)) {
+                return $this->output
+                    ->set_status_header(422)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 422,
+                        'message' => 'Product name is required',
+                        'data' => null
+                    ]));
+            }
+
+            if (empty($category_id)) {
+                return $this->output
+                    ->set_status_header(422)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 422,
+                        'message' => 'Category is required',
+                        'data' => null
+                    ]));
+            }
+
+            if (empty($mrp) || $mrp <= 0) {
+                return $this->output
+                    ->set_status_header(422)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 422,
+                        'message' => 'MRP is required',
+                        'data' => null
+                    ]));
+            }
+
+            if (empty($selling_price) || $selling_price <= 0) {
+                return $this->output
+                    ->set_status_header(422)
+                    ->set_output(json_encode([
+                        'status' => false,
+                        'code' => 422,
+                        'message' => 'Selling price is required',
+                        'data' => null
+                    ]));
+            }
+
+            // Check if vendor already added this product / variant
+            $this->db->where('vendor_id', $vendor_id)->where('product_id', $product_id);
+            if (!empty($variant_id)) {
+                $this->db->where('variant_id', $variant_id);
+            } else {
+                $this->db->where('(variant_id IS NULL OR variant_id = 0)');
+            }
+            $existing = $this->db->get('vendor_products')->row();
 
             if ($existing) {
                 return $this->output
@@ -1334,7 +1458,7 @@ class Api extends CI_Controller
                     ->set_output(json_encode([
                         'status' => false,
                         'code' => 409,
-                        'message' => 'You have already added this product',
+                        'message' => 'You have already added this product pack size to your store',
                         'data' => null
                     ]));
             }
@@ -1343,6 +1467,7 @@ class Api extends CI_Controller
             $insert_data = [
                 'vendor_id' => $vendor_id,
                 'product_id' => $product_id,
+                'variant_id' => !empty($variant_id) ? (int)$variant_id : NULL,
                 'product_name' => $product_name,
                 'brand' => $brand,
                 'category_id' => $category_id,
@@ -1350,6 +1475,7 @@ class Api extends CI_Controller
                 'mrp' => $mrp,
                 'selling_price' => $selling_price,
                 'stock' => $stock ?: 0,
+                'temporarily_unavailable' => $temp_unavail,
                 'description' => $description,
                 'image' => NULL, // Will use admin product image
                 'is_active' => 1,
@@ -1359,12 +1485,20 @@ class Api extends CI_Controller
             $this->db->insert('vendor_products', $insert_data);
             $vendor_product_id = $this->db->insert_id();
 
-            // Get inserted product with admin image
+            // Get inserted product with admin image & variant
             $vendor_product = $this->db
-                ->select('vp.*, p.image as admin_image, c.name as category_name')
+                ->select('vp.*, 
+                    COALESCE(NULLIF(vp.brand, ""), p.brand, "") as brand,
+                    COALESCE(NULLIF(vp.description, ""), p.description, "") as description,
+                    COALESCE(NULLIF(vp.unit, ""), pv.variant_name, "piece") as unit,
+                    p.image as admin_image, 
+                    c.name as category_name,
+                    pv.variant_name,
+                    pv.sku as variant_sku')
                 ->from('vendor_products vp')
                 ->join('products p', 'p.id = vp.product_id', 'left')
                 ->join('categories c', 'c.id = vp.category_id', 'left')
+                ->join('product_variants pv', 'pv.id = vp.variant_id', 'left')
                 ->where('vp.id', $vendor_product_id)
                 ->get()
                 ->row();
@@ -1380,15 +1514,19 @@ class Api extends CI_Controller
                     'data' => [
                         'id' => (int)$vendor_product->id,
                         'product_id' => (int)$vendor_product->product_id,
+                        'variant_id' => $vendor_product->variant_id ? (int)$vendor_product->variant_id : null,
                         'product_name' => $vendor_product->product_name,
-                        'brand' => $vendor_product->brand,
+                        'brand' => $vendor_product->brand ?? '',
                         'category_id' => (int)$vendor_product->category_id,
                         'category_name' => $vendor_product->category_name,
-                        'unit' => $vendor_product->unit,
+                        'unit' => $vendor_product->unit ?? 'piece',
+                        'variant_name' => $vendor_product->variant_name,
+                        'variant_sku' => $vendor_product->variant_sku,
                         'mrp' => (float)$vendor_product->mrp,
                         'selling_price' => (float)$vendor_product->selling_price,
                         'stock' => (int)$vendor_product->stock,
-                        'description' => $vendor_product->description,
+                        'temporarily_unavailable' => (int)($vendor_product->temporarily_unavailable ?? 0),
+                        'description' => $vendor_product->description ?? '',
                         'image' => $product_image
                     ]
                 ]));
@@ -1448,6 +1586,7 @@ class Api extends CI_Controller
                 'mrp' => $mrp,
                 'selling_price' => $selling_price,
                 'stock' => $stock ?: 0,
+                'temporarily_unavailable' => $temp_unavail,
                 'description' => $description,
                 'image' => $image,
                 'is_active' => 1,
@@ -1483,6 +1622,7 @@ class Api extends CI_Controller
                         'mrp' => (float)$vendor_product->mrp,
                         'selling_price' => (float)$vendor_product->selling_price,
                         'stock' => (int)$vendor_product->stock,
+                        'temporarily_unavailable' => (int)($vendor_product->temporarily_unavailable ?? 0),
                         'description' => $vendor_product->description,
                         'image' => base_url($vendor_product->image)
                     ]
@@ -1664,6 +1804,11 @@ class Api extends CI_Controller
             $update_data['description'] = trim($this->input->post('description'));
         }
 
+        if ($this->input->post('temporarily_unavailable') !== null && $this->input->post('temporarily_unavailable') !== '') {
+            $temp_val = $this->input->post('temporarily_unavailable');
+            $update_data['temporarily_unavailable'] = ($temp_val === '1' || $temp_val === 1 || $temp_val === 'true' || $temp_val === true) ? 1 : 0;
+        }
+
         // Handle image upload
         // LOGIC: Only allow image change if product_id is NULL (vendor's own product)
         if (!empty($_FILES['image']['name'])) {
@@ -1731,10 +1876,18 @@ class Api extends CI_Controller
 
         // Get updated product
         $updated_product = $this->db
-            ->select('vp.*, p.image as admin_image, c.name as category_name')
+            ->select('vp.*, 
+                COALESCE(NULLIF(vp.brand, ""), p.brand, "") as brand,
+                COALESCE(NULLIF(vp.description, ""), p.description, "") as description,
+                COALESCE(NULLIF(vp.unit, ""), pv.variant_name, "piece") as unit,
+                p.image as admin_image, 
+                c.name as category_name,
+                pv.variant_name,
+                pv.sku as variant_sku')
             ->from('vendor_products vp')
             ->join('products p', 'p.id = vp.product_id', 'left')
             ->join('categories c', 'c.id = vp.category_id', 'left')
+            ->join('product_variants pv', 'pv.id = vp.variant_id', 'left')
             ->where('vp.id', $id)
             ->get()
             ->row();
@@ -1759,15 +1912,19 @@ class Api extends CI_Controller
                 'data' => [
                     'id' => (int)$updated_product->id,
                     'product_id' => $updated_product->product_id ? (int)$updated_product->product_id : null,
+                    'variant_id' => $updated_product->variant_id ? (int)$updated_product->variant_id : null,
                     'product_name' => $updated_product->product_name,
-                    'brand' => $updated_product->brand,
+                    'brand' => $updated_product->brand ?? '',
                     'category_id' => (int)$updated_product->category_id,
                     'category_name' => $updated_product->category_name,
-                    'unit' => $updated_product->unit,
+                    'unit' => $updated_product->unit ?? 'piece',
+                    'variant_name' => $updated_product->variant_name,
+                    'variant_sku' => $updated_product->variant_sku,
                     'mrp' => (float)$updated_product->mrp,
                     'selling_price' => (float)$updated_product->selling_price,
                     'stock' => (int)$updated_product->stock,
-                    'description' => $updated_product->description,
+                    'temporarily_unavailable' => (int)($updated_product->temporarily_unavailable ?? 0),
+                    'description' => $updated_product->description ?? '',
                     'image' => $product_image,
                     'is_own_product' => $updated_product->product_id === null
                 ]
@@ -1792,7 +1949,8 @@ class Api extends CI_Controller
 
         $vendor_id = $decoded->data->id;
         $search = trim($this->input->get('search') ?? '');
-        $low_stock_limit = 5; // Define threshold for "Low Stock" (e.g., <= 5)
+        $this->load->helper('distance');
+        $low_stock_limit = get_low_stock_threshold();
 
         // 2. Fetch Products
         $this->db->select('vp.*, c.name as category_name');
@@ -1811,7 +1969,7 @@ class Api extends CI_Controller
         $products = $this->db->order_by('vp.product_name', 'ASC')->get()->result();
 
         // 3. Process Data & Stats
-        $stats = ['total' => 0, 'in_stock' => 0, 'low_stock' => 0, 'out_of_stock' => 0];
+        $stats = ['total' => 0, 'in_stock' => 0, 'low_stock' => 0, 'out_of_stock' => 0, 'temporarily_unavailable' => 0];
         $alerts = ['low_stock_products' => [], 'out_of_stock_products' => []];
         $data = [];
 
@@ -1819,16 +1977,20 @@ class Api extends CI_Controller
             $stats['total']++;
 
             // Determine Status
-            $status = 'in_stock';
-            if ($p->stock == 0) {
+            $is_temp_unavail = ((int)($p->temporarily_unavailable ?? 0) === 1);
+            if ($is_temp_unavail) {
+                $status = 'temporarily_unavailable';
+                $stats['temporarily_unavailable']++;
+            } elseif ($p->stock == 0) {
                 $status = 'out_of_stock';
                 $stats['out_of_stock']++;
                 $alerts['out_of_stock_products'][] = $p->product_name . ' (' . $p->stock . ' ' . $p->unit . ')';
-            } elseif ($p->stock <= $low_stock_limit) {
+            } elseif ($p->stock < $low_stock_limit) {
                 $status = 'low_stock';
                 $stats['low_stock']++;
                 $alerts['low_stock_products'][] = $p->product_name . ' (' . $p->stock . ' ' . $p->unit . ')';
             } else {
+                $status = 'in_stock';
                 $stats['in_stock']++;
             }
 
@@ -1849,11 +2011,12 @@ class Api extends CI_Controller
                 'brand' => $p->brand,
                 'category_name' => $p->category_name,
                 'stock' => (int)$p->stock,
+                'temporarily_unavailable' => (int)($p->temporarily_unavailable ?? 0),
                 'unit' => $p->unit,
                 'mrp' => (float)$p->mrp,
                 'selling_price' => (float)$p->selling_price,
                 'image' => $image_url,
-                'status' => $status // 'in_stock', 'low_stock', 'out_of_stock'
+                'status' => $status
             ];
         }
 
@@ -1899,6 +2062,7 @@ class Api extends CI_Controller
 
         $product_id = $payload['product_id'] ?? null; // vendor_products.id
         $new_stock  = $payload['stock'] ?? null;
+        $temp_unavail = $payload['temporarily_unavailable'] ?? null;
 
         // Validation
         if (!is_numeric($product_id) || !is_numeric($new_stock) || (int)$new_stock < 0) {
@@ -1930,12 +2094,16 @@ class Api extends CI_Controller
         }
 
         // Update
-        $this->db->where('id', $product_id)->update('vendor_products', ['stock' => $new_stock]);
+        $update_data = ['stock' => $new_stock];
+        if ($temp_unavail !== null) {
+            $update_data['temporarily_unavailable'] = ($temp_unavail === '1' || $temp_unavail === 1 || $temp_unavail === 'true' || $temp_unavail === true) ? 1 : 0;
+        }
+        $this->db->where('id', $product_id)->update('vendor_products', $update_data);
 
-        // Status label (same as inventory logic)
-        $status = 'in_stock';
-        if ($new_stock == 0) $status = 'out_of_stock';
-        elseif ($new_stock <= 10) $status = 'low_stock';
+        // Fetch refreshed state and classify
+        $updated_row = $this->db->where('id', $product_id)->get('vendor_products')->row();
+        $this->load->helper('distance');
+        $classification = classify_stock_state($new_stock, $updated_row->temporarily_unavailable ?? 0);
 
         return $this->output->set_status_header(200)->set_output(json_encode([
             'status' => true,
@@ -1945,8 +2113,10 @@ class Api extends CI_Controller
                 'id' => $product_id,
                 'product_name' => $product->product_name,
                 'stock' => $new_stock,
+                'temporarily_unavailable' => (int)($updated_row->temporarily_unavailable ?? 0),
                 'unit' => $product->unit,
-                'status' => $status
+                'status' => $classification['stock_status'],
+                'status_label' => $classification['stock_status_label']
             ]
         ]));
     }
@@ -2760,45 +2930,22 @@ class Api extends CI_Controller
             $existing_delivery_option = isset($order->delivery_option) ? $order->delivery_option : '';
             $existing_distance = isset($order->distance) ? $order->distance : null;
 
-            // If not provided in request, check if already in DB
-            if (empty($delivery_option) && !empty($existing_delivery_option)) {
-                $delivery_option = $existing_delivery_option;
+            // If not provided in request, check if already in DB or default to delivery_partner
+            if (empty($delivery_option)) {
+                $delivery_option = !empty($existing_delivery_option) ? $existing_delivery_option : 'delivery_partner';
             }
             if (($distance_val === null || $distance_val === '') && $existing_distance !== null) {
                 $distance = floatval($existing_distance);
             } else {
-                $distance = ($distance_val !== null && $distance_val !== '' && is_numeric($distance_val)) ? floatval($distance_val) : null;
+                $distance = ($distance_val !== null && $distance_val !== '' && is_numeric($distance_val)) ? floatval($distance_val) : ($existing_distance !== null ? floatval($existing_distance) : 0.0);
             }
 
-            // Validate delivery_option
-            if (empty($delivery_option) || !in_array($delivery_option, ['self', 'delivery_partner'], true)) {
-                return $this->output
-                    ->set_status_header(422)
-                    ->set_output(json_encode([
-                        'status' => false,
-                        'code' => 422,
-                        'message' => 'Delivery option is required when shipping or delivering. Choose either "self" or "delivery_partner".',
-                        'data' => null
-                    ]));
-            }
+            // Calculate delivery charge using standard distance helper
+            $this->load->helper('distance');
+            $chosen_slot = isset($order->chosen_time_option) ? $order->chosen_time_option : null;
+            $del_type = isset($order->delivery_type) ? $order->delivery_type : 'normal';
+            $delivery_charge = calculate_delivery_charge_amount($distance, $del_type, $chosen_slot);
 
-            // Validate distance
-            if ($distance === null || $distance < 0) {
-                return $this->output
-                    ->set_status_header(422)
-                    ->set_output(json_encode([
-                        'status' => false,
-                        'code' => 422,
-                        'message' => 'A valid distance in KM (numeric, positive) is required when shipping or delivering.',
-                        'data' => null
-                    ]));
-            }
-
-            // Calculate delivery charge (10 Rs per KM)
-            $delivery_charge = $distance * 10.00;
-            if (isset($order->delivery_type) && $order->delivery_type === 'urgent') {
-                $delivery_charge += 50.00;
-            }
             // Calculate new total amount
             $total_amount = floatval($order->subtotal) + floatval($order->gst_amount) + $delivery_charge - floatval($order->discount);
         }
@@ -2959,6 +3106,152 @@ class Api extends CI_Controller
             'changed_by' => $changed_by,
             'created_at' => date('Y-m-d H:i:s'),
         ]);
+    }
+
+    /**
+     * Get complaints (support requests) relating to this vendor's products
+     * Strictly scopes orders and order items to this vendor only!
+     */
+    public function get_vendor_complaints()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        // Auth
+        $authHeader = $this->input->get_request_header('Authorization', TRUE);
+        $token = null;
+        if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+            $token = $matches[1];
+        }
+
+        $decoded = $this->verify_jwt($token);
+        if (!$decoded || empty($decoded->data->id)) {
+            return $this->output->set_status_header(401)->set_output(json_encode([
+                'status'  => false,
+                'code'    => 401,
+                'message' => 'Unauthorized',
+                'data'    => null
+            ]));
+        }
+
+        $vendor_id = (int)$decoded->data->id;
+        $status_filter = trim($this->input->get('status', true) ?? '');
+        $category_filter = trim($this->input->get('category', true) ?? '');
+        $search = trim($this->input->get('search', true) ?? '');
+
+        // 1. Calculate stats for this vendor across all their complaints
+        $stats_q = $this->db->select('sr.status, COUNT(DISTINCT sr.id) as cnt')
+            ->from('support_requests sr')
+            ->join('order_items oi', 'oi.order_id = sr.order_id', 'inner')
+            ->where('oi.vendor_id', $vendor_id)
+            ->group_by('sr.status')
+            ->get()
+            ->result();
+
+        $open_count = 0;
+        $in_progress_count = 0;
+        $resolved_count = 0;
+        $total_count = 0;
+        foreach ($stats_q as $st) {
+            $cnt = (int)$st->cnt;
+            $total_count += $cnt;
+            if ($st->status === 'Open') $open_count = $cnt;
+            elseif ($st->status === 'In Progress') $in_progress_count = $cnt;
+            elseif ($st->status === 'Resolved') $resolved_count = $cnt;
+        }
+
+        // 2. Query complaints for orders that contain this vendor's items
+        $this->db->select('sr.*, o.order_number, o.created_at as order_date, o.status as order_status, 
+                           u.name as customer_name, u.mobile as customer_mobile, u.email as customer_email')
+            ->from('support_requests sr')
+            ->join('orders o', 'o.id = sr.order_id', 'inner')
+            ->join('users u', 'u.id = sr.customer_id', 'left')
+            ->join('order_items oi', 'oi.order_id = sr.order_id', 'inner')
+            ->where('oi.vendor_id', $vendor_id);
+
+        if ($status_filter !== '' && in_array($status_filter, ['Open', 'In Progress', 'Resolved'], true)) {
+            $this->db->where('sr.status', $status_filter);
+        }
+
+        if ($category_filter !== '') {
+            $this->db->where('sr.category', $category_filter);
+        }
+
+        if ($search !== '') {
+            $this->db->group_start();
+            $this->db->like('sr.ticket_number', $search);
+            $this->db->or_like('o.order_number', $search);
+            $this->db->or_like('u.name', $search);
+            $this->db->or_like('u.mobile', $search);
+            $this->db->or_like('sr.description', $search);
+            $this->db->group_end();
+        }
+
+        $this->db->group_by('sr.id');
+        $this->db->order_by('CASE 
+            WHEN sr.status = "Open" THEN 1 
+            WHEN sr.status = "In Progress" THEN 2 
+            ELSE 3 
+        END', 'ASC', FALSE);
+        $this->db->order_by('sr.id', 'DESC');
+
+        $requests = $this->db->get()->result();
+
+        $complaint_list = [];
+        foreach ($requests as $r) {
+            // Strictly fetch ONLY items from this order that belong to THIS vendor!
+            $vendor_items_raw = $this->db
+                ->where('order_id', $r->order_id)
+                ->where('vendor_id', $vendor_id)
+                ->get('order_items')
+                ->result();
+
+            $vendor_items = [];
+            foreach ($vendor_items_raw as $item) {
+                $vendor_items[] = [
+                    'id'           => (int)$item->id,
+                    'product_id'   => (int)$item->product_id,
+                    'product_name' => $item->product_name,
+                    'variant_name' => $item->variant_name ?? '',
+                    'quantity'     => (int)$item->quantity,
+                    'price'        => (float)$item->price,
+                    'image'        => !empty($item->product_image) ? base_url($item->product_image) : ''
+                ];
+            }
+
+            $complaint_list[] = [
+                'id'             => (int)$r->id,
+                'ticket_number'  => $r->ticket_number,
+                'order_id'       => (int)$r->order_id,
+                'order_number'   => $r->order_number,
+                'order_status'   => $r->order_status,
+                'order_date'     => $r->order_date,
+                'customer_id'    => (int)$r->customer_id,
+                'customer_name'  => $r->customer_name ?: 'Customer #' . $r->customer_id,
+                'customer_mobile'=> $r->customer_mobile ?: '',
+                'customer_email' => $r->customer_email ?: '',
+                'category'       => $r->category,
+                'description'    => $r->description,
+                'status'         => $r->status,
+                'admin_response' => $r->admin_response,
+                'resolved_at'    => $r->resolved_at,
+                'created_at'     => $r->created_at,
+                'items'          => $vendor_items // ONLY items belonging to this vendor
+            ];
+        }
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status'  => true,
+            'code'    => 200,
+            'message' => 'Vendor complaints fetched successfully.',
+            'data'    => [
+                'complaints'        => $complaint_list,
+                'total_count'       => $total_count,
+                'open_count'        => $open_count,
+                'in_progress_count' => $in_progress_count,
+                'resolved_count'    => $resolved_count,
+            ]
+        ]));
     }
 
     public function get_vendor_stats()

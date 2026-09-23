@@ -119,6 +119,16 @@ if (!function_exists('resolve_order_distance')) {
         // 1. Calculate pure math distance first (always available, instant, zero latency)
         $pure_math_km = calculate_distance_km($lat1, $lon1, $lat2, $lon2);
 
+        // Hyper-local distance (< 1.0 km): use direct pure math distance to stay consistent with product page & prevent road median looping
+        if ($pure_math_km < 1.0) {
+            return [
+                'distance_km'   => round($pure_math_km, 2),
+                'method'        => 'pure_math',
+                'duration_mins' => max(1, (int)round($pure_math_km * 5)),
+                'pure_math_km'  => round($pure_math_km, 2)
+            ];
+        }
+
         // 2. Extra accuracy layer: attempt live road routing if requested
         if ($attempt_road_routing) {
             $road = calculate_road_distance($lat1, $lon1, $lat2, $lon2, 2.0);
@@ -252,21 +262,240 @@ if (!function_exists('set_delivery_charge_per_km')) {
     }
 }
 
+if (!function_exists('get_immediate_delivery_charge')) {
+    /**
+     * Get the admin-configured extra charge for immediate delivery in Rupees.
+     * Reads from the settings table with a fallback default of 50.00 Rs.
+     *
+     * @return float Immediate delivery extra charge
+     */
+    function get_immediate_delivery_charge()
+    {
+        if (function_exists('get_instance')) {
+            $CI =& get_instance();
+            if (isset($CI->db) && $CI->db->table_exists('settings')) {
+                $row = $CI->db->where('key', 'immediate_delivery_charge')->get('settings')->row();
+                if ($row && is_numeric($row->value) && (float)$row->value >= 0) {
+                    return (float)$row->value;
+                }
+            }
+        }
+        return 50.00;
+    }
+}
+
+if (!function_exists('set_immediate_delivery_charge')) {
+    /**
+     * Update the admin-configured extra charge for immediate delivery in Rupees.
+     *
+     * @param float|numeric $charge
+     * @return bool
+     */
+    function set_immediate_delivery_charge($charge)
+    {
+        if (function_exists('get_instance')) {
+            $CI =& get_instance();
+            if (isset($CI->db) && is_numeric($charge) && (float)$charge >= 0) {
+                $val = number_format((float)$charge, 2, '.', '');
+                $existing = $CI->db->where('key', 'immediate_delivery_charge')->get('settings')->row();
+                if ($existing) {
+                    return $CI->db->where('key', 'immediate_delivery_charge')->update('settings', [
+                        'value' => $val,
+                        'updated_at' => date('Y-m-d H:i:s')
+                    ]);
+                } else {
+                    return $CI->db->insert('settings', [
+                        'key' => 'immediate_delivery_charge',
+                        'value' => $val,
+                        'description' => 'Extra surcharge for Immediate Delivery time slot (in Rupees)',
+                        'updated_at' => date('Y-m-d H:i:s')
+                    ]);
+                }
+            }
+        }
+        return false;
+    }
+}
+
+if (!function_exists('get_low_stock_threshold')) {
+    /**
+     * Get the admin-configured low stock warning threshold.
+     * Reads from the settings table with a fallback default of 5.
+     *
+     * @return int Low stock threshold quantity
+     */
+    function get_low_stock_threshold()
+    {
+        if (function_exists('get_instance')) {
+            $CI =& get_instance();
+            if (isset($CI->db) && $CI->db->table_exists('settings')) {
+                $row = $CI->db->where('key', 'low_stock_threshold')->get('settings')->row();
+                if ($row && is_numeric($row->value) && (int)$row->value > 0) {
+                    return (int)$row->value;
+                }
+            }
+        }
+        return 5;
+    }
+}
+
+if (!function_exists('set_low_stock_threshold')) {
+    /**
+     * Update the admin-configured low stock warning threshold.
+     *
+     * @param int|numeric $threshold
+     * @return bool
+     */
+    function set_low_stock_threshold($threshold)
+    {
+        if (function_exists('get_instance')) {
+            $CI =& get_instance();
+            if (isset($CI->db) && is_numeric($threshold) && (int)$threshold > 0) {
+                $val = (string)(int)$threshold;
+                $existing = $CI->db->where('key', 'low_stock_threshold')->get('settings')->row();
+                if ($existing) {
+                    return $CI->db->where('key', 'low_stock_threshold')->update('settings', [
+                        'value' => $val,
+                        'updated_at' => date('Y-m-d H:i:s')
+                    ]);
+                } else {
+                    return $CI->db->insert('settings', [
+                        'key' => 'low_stock_threshold',
+                        'value' => $val,
+                        'description' => 'Low stock quantity threshold for warning badge',
+                        'updated_at' => date('Y-m-d H:i:s')
+                    ]);
+                }
+            }
+        }
+        return false;
+    }
+}
+
+if (!function_exists('classify_stock_state')) {
+    /**
+     * Classifies a vendor product's stock into one of 4 states:
+     * 1. 'temporarily_unavailable': Vendor toggled paused
+     * 2. 'out_of_stock': stock <= 0
+     * 3. 'low_stock': stock > 0 and stock < low_stock_threshold
+     * 4. 'available': stock >= low_stock_threshold
+     *
+     * @param int|numeric $stock Current stock quantity
+     * @param int|bool $temporarily_unavailable Vendor paused toggle
+     * @param int|null $threshold Low stock threshold (defaults to settings value)
+     * @return array Classified stock state dictionary
+     */
+    function classify_stock_state($stock, $temporarily_unavailable = 0, $threshold = null)
+    {
+        if ($threshold === null) {
+            $threshold = get_low_stock_threshold();
+        }
+        $stock = (int)$stock;
+        $is_temp_unavail = ((int)$temporarily_unavailable === 1 || $temporarily_unavailable === true || $temporarily_unavailable === '1');
+
+        if ($is_temp_unavail) {
+            return [
+                'stock_status'        => 'temporarily_unavailable',
+                'stock_status_label'  => 'Temporarily Unavailable',
+                'is_purchasable'      => false,
+                'can_add_to_cart'     => false,
+                'low_stock_threshold' => (int)$threshold,
+                'temporarily_unavailable' => 1
+            ];
+        }
+
+        if ($stock <= 0) {
+            return [
+                'stock_status'        => 'out_of_stock',
+                'stock_status_label'  => 'Unavailable',
+                'is_purchasable'      => false,
+                'can_add_to_cart'     => false,
+                'low_stock_threshold' => (int)$threshold,
+                'temporarily_unavailable' => 0
+            ];
+        }
+
+        if ($stock < (int)$threshold) {
+            return [
+                'stock_status'        => 'low_stock',
+                'stock_status_label'  => "Only {$stock} left",
+                'is_purchasable'      => true,
+                'can_add_to_cart'     => true,
+                'low_stock_threshold' => (int)$threshold,
+                'temporarily_unavailable' => 0
+            ];
+        }
+
+        return [
+            'stock_status'        => 'available',
+            'stock_status_label'  => 'In Stock',
+            'is_purchasable'      => true,
+            'can_add_to_cart'     => true,
+            'low_stock_threshold' => (int)$threshold,
+            'temporarily_unavailable' => 0
+        ];
+    }
+}
+
+
 if (!function_exists('calculate_delivery_charge_amount')) {
     /**
-     * Calculate delivery charge based on distance in KM, admin per-KM rate, and delivery type.
+     * Calculate delivery charge based on distance in KM, admin per-KM rate, and delivery time slot / type.
+     * Distance rounding rules:
+     * - Under 1 KM: counted as 1 KM (1 * rate_per_km, e.g. 10 Rs at 10/km).
+     * - 1 KM and above: rounded mathematically (e.g. 2.4 km -> 2 km, 2.5 km -> 3 km, 2.6 km -> 3 km).
+     * Surcharge:
+     * - If immediate delivery is selected, adds admin-configured immediate_delivery_charge.
      *
      * @param float|numeric $distance_km Distance in kilometers
-     * @param string $delivery_type 'normal' or 'urgent'
+     * @param string $delivery_type 'normal' or 'urgent' / 'immediately' (legacy support)
+     * @param string|null $chosen_time_option Delivery time slot ('immediately', 'later', 'lunch', 'dinner', 'custom')
      * @return float Calculated delivery charge rounded to 2 decimal places
      */
-    function calculate_delivery_charge_amount($distance_km, $delivery_type = 'normal')
+    function calculate_delivery_charge_amount($distance_km, $delivery_type = 'normal', $chosen_time_option = null)
     {
         $rate = get_delivery_charge_per_km();
         $dist = max(0.0, is_numeric($distance_km) ? (float)$distance_km : 0.0);
-        $base = round($dist * $rate, 2);
-        $extra = ($delivery_type === 'urgent') ? 50.00 : 0.00;
+        $billed_km = ($dist < 1.0) ? 1 : max(1, (int)round($dist));
+        $base = round($billed_km * $rate, 2);
+
+        $is_immediate = ($chosen_time_option === 'immediately' || $delivery_type === 'urgent' || $delivery_type === 'immediately');
+        $extra = $is_immediate ? get_immediate_delivery_charge() : 0.00;
+
         return round($base + $extra, 2);
+    }
+}
+
+if (!function_exists('get_delivery_charge_breakdown')) {
+    /**
+     * Get detailed breakdown of delivery charge calculation for an order.
+     *
+     * @param float|numeric $distance_km Distance in kilometers
+     * @param string|null $chosen_time_option Delivery time slot ('immediately', 'later', etc.)
+     * @param string $delivery_type Legacy delivery type
+     * @return array Breakdown details
+     */
+    function get_delivery_charge_breakdown($distance_km, $chosen_time_option = null, $delivery_type = 'normal')
+    {
+        $rate = get_delivery_charge_per_km();
+        $dist = max(0.0, is_numeric($distance_km) ? (float)$distance_km : 0.0);
+        $billed_km = ($dist < 1.0) ? 1 : max(1, (int)round($dist));
+        $base = round($billed_km * $rate, 2);
+
+        $is_immediate = ($chosen_time_option === 'immediately' || $delivery_type === 'urgent' || $delivery_type === 'immediately');
+        $immediate_charge = get_immediate_delivery_charge();
+        $extra = $is_immediate ? $immediate_charge : 0.00;
+
+        return [
+            'actual_distance_km'        => round($dist, 2),
+            'billed_distance_km'        => (int)$billed_km,
+            'rate_per_km'               => round($rate, 2),
+            'base_charge'               => round($base, 2),
+            'immediate_delivery_charge' => round($immediate_charge, 2),
+            'is_immediate'              => $is_immediate,
+            'extra_charge'              => round($extra, 2),
+            'total_delivery_charge'     => round($base + $extra, 2),
+        ];
     }
 }
 

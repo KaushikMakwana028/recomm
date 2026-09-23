@@ -719,7 +719,176 @@
                     <?= form_error('email', '<small class="text-danger mt-1 d-block">', '</small>') ?>
                 </div>
             </div>
+
+            <?php if ($user->role == 'vendor'): ?>
+                <!-- Store Information Card -->
+                <div class="rc-card">
+                    <div class="rc-card-header">
+                        <div class="rc-card-icon-box"><i class="fas fa-store"></i></div>
+                        <div>
+                            <h3>Store Information</h3>
+                            <div class="rc-card-sub">Business profile, physical address and location</div>
+                        </div>
+                    </div>
+
+                    <div class="rc-form-group">
+                        <label class="rc-form-label">Store Banner Photo</label>
+                        <div class="d-flex align-items-center gap-3 mb-2">
+                            <?php if (!empty($user->store_photo)): ?>
+                                <img id="current_store_photo" src="<?= base_url($user->store_photo) ?>" alt="Store Photo"
+                                    style="height: 80px; width: 140px; object-fit: cover; border-radius: 8px; border: 1px solid var(--rc-line);">
+                            <?php endif; ?>
+                            <div id="storePhotoPreview" style="display: none;">
+                                <img id="preview_store" src="" alt="New Store Photo Preview"
+                                    style="height: 80px; width: 140px; object-fit: cover; border-radius: 8px; border: 2px solid var(--rc-green-500);">
+                            </div>
+                        </div>
+                        <input type="file" class="rc-form-control" id="store_photo" name="store_photo" accept="image/*" onchange="previewStorePhoto(this)">
+                        <small class="text-muted mt-1 d-block">Allowed: JPG, PNG, WEBP. Max: 5MB</small>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="store_name" class="rc-form-label">Store Name <span class="req">*</span></label>
+                            <input type="text" class="rc-form-control" id="store_name" name="store_name"
+                                value="<?= set_value('store_name', $user->store_name) ?>" required>
+                            <?= form_error('store_name', '<small class="text-danger mt-1 d-block">', '</small>') ?>
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="owner_name" class="rc-form-label">Owner Name</label>
+                            <input type="text" class="rc-form-control" id="owner_name" name="owner_name"
+                                value="<?= set_value('owner_name', $user->owner_name) ?>" placeholder="e.g. John Doe">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="contact_number" class="rc-form-label">Store Contact Number</label>
+                            <input type="text" class="rc-form-control" id="contact_number" name="contact_number"
+                                value="<?= set_value('contact_number', $user->contact_number) ?>" placeholder="e.g. 9876543210">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="gst_number" class="rc-form-label">GST Number</label>
+                            <input type="text" class="rc-form-control" id="gst_number" name="gst_number"
+                                value="<?= set_value('gst_number', $user->gst_number) ?>" placeholder="e.g. 27AAPFU0939F1ZV">
+                        </div>
+                    </div>
+
+                    <div class="rc-form-group">
+                        <label for="address" class="rc-form-label">Store Address</label>
+                        <textarea class="rc-form-control" id="address" name="address" rows="2"
+                            placeholder="Full physical shop address..."><?= set_value('address', $user->address) ?></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 rc-form-group">
+                            <label for="pincode" class="rc-form-label">Pincode</label>
+                            <input type="text" class="rc-form-control" id="pincode" name="pincode"
+                                value="<?= set_value('pincode', $user->pincode) ?>" placeholder="e.g. 380001">
+                        </div>
+                        <div class="col-md-4 rc-form-group">
+                            <label for="latitude" class="rc-form-label">Latitude</label>
+                            <input type="text" class="rc-form-control" id="latitude" name="latitude"
+                                value="<?= set_value('latitude', $user->latitude) ?>" placeholder="e.g. 23.079496">
+                        </div>
+                        <div class="col-md-4 rc-form-group">
+                            <label for="longitude" class="rc-form-label">Longitude</label>
+                            <input type="text" class="rc-form-control" id="longitude" name="longitude"
+                                value="<?= set_value('longitude', $user->longitude) ?>" placeholder="e.g. 72.672547">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="opening_time" class="rc-form-label">Opening Time</label>
+                            <input type="time" class="rc-form-control" id="opening_time" name="opening_time"
+                                value="<?= set_value('opening_time', $user->opening_time ? substr($user->opening_time, 0, 5) : '') ?>">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="closing_time" class="rc-form-label">Closing Time</label>
+                            <input type="time" class="rc-form-control" id="closing_time" name="closing_time"
+                                value="<?= set_value('closing_time', $user->closing_time ? substr($user->closing_time, 0, 5) : '') ?>">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bank & Settlement Details Card -->
+                <div class="rc-card">
+                    <div class="rc-card-header">
+                        <div class="rc-card-icon-box"><i class="fas fa-university"></i></div>
+                        <div>
+                            <h3>Bank & Payout Details</h3>
+                            <div class="rc-card-sub">Bank accounts for order settlement transfers</div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="account_holder_name" class="rc-form-label">Account Holder Name</label>
+                            <input type="text" class="rc-form-control" id="account_holder_name" name="account_holder_name"
+                                value="<?= set_value('account_holder_name', $user->account_holder_name) ?>" placeholder="e.g. Makwana Kaushik">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="bank_name" class="rc-form-label">Bank Name</label>
+                            <input type="text" class="rc-form-control" id="bank_name" name="bank_name"
+                                value="<?= set_value('bank_name', $user->bank_name) ?>" placeholder="e.g. State Bank of India">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="account_number" class="rc-form-label">Account Number</label>
+                            <input type="text" class="rc-form-control" id="account_number" name="account_number"
+                                value="<?= set_value('account_number', $user->account_number) ?>" placeholder="e.g. 123456789012">
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="ifsc_code" class="rc-form-label">IFSC Code</label>
+                            <input type="text" class="rc-form-control" id="ifsc_code" name="ifsc_code"
+                                value="<?= set_value('ifsc_code', $user->ifsc_code) ?>" placeholder="e.g. SBIN0001234">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 rc-form-group">
+                            <label for="account_type" class="rc-form-label">Account Type</label>
+                            <select class="rc-form-control" id="account_type" name="account_type">
+                                <option value="">Select Account Type</option>
+                                <?php $curr_acc = set_value('account_type', $user->account_type); ?>
+                                <option value="savings" <?= $curr_acc == 'savings' ? 'selected' : '' ?>>Savings Account</option>
+                                <option value="current" <?= $curr_acc == 'current' ? 'selected' : '' ?>>Current Account</option>
+                                <option value="business" <?= $curr_acc == 'business' ? 'selected' : '' ?>>Business Account</option>
+                                <option value="cash_credit" <?= $curr_acc == 'cash_credit' ? 'selected' : '' ?>>Cash Credit</option>
+                                <option value="overdraft" <?= $curr_acc == 'overdraft' ? 'selected' : '' ?>>Overdraft</option>
+                                <option value="joint" <?= $curr_acc == 'joint' ? 'selected' : '' ?>>Joint Account</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 rc-form-group">
+                            <label for="branch_name" class="rc-form-label">Branch Name</label>
+                            <input type="text" class="rc-form-control" id="branch_name" name="branch_name"
+                                value="<?= set_value('branch_name', $user->branch_name) ?>" placeholder="e.g. Navrangpura Branch">
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($user->role == 'user'): ?>
+                <div class="rc-card">
+                    <div class="rc-card-header">
+                        <div class="rc-card-icon-box"><i class="fas fa-map-marker-alt"></i></div>
+                        <div>
+                            <h3>Delivery Address</h3>
+                            <div class="rc-card-sub">Default customer shipping address</div>
+                        </div>
+                    </div>
+                    <div class="rc-form-group mb-0">
+                        <label for="user_address" class="rc-form-label">Address</label>
+                        <textarea class="rc-form-control" id="user_address" name="address" rows="3"
+                            placeholder="Enter user delivery address..."><?= set_value('address', $user->address) ?></textarea>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
+        <!-- /Left Column -->
 
         <!-- Right Column -->
         <div class="col-lg-4">
@@ -820,6 +989,7 @@
 
             </div>
         </div>
+        <!-- /Right Column -->
     </div>
 
     <!-- Mobile sticky action bar -->
@@ -853,6 +1023,19 @@
                 }
                 img.src = e.target.result;
                 box.classList.add('has-new-image');
+            }
+            reader.readAsDataURL(input.files[0]);
+        }
+    }
+
+    function previewStorePhoto(input) {
+        if (input.files && input.files[0]) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('preview_store').src = e.target.result;
+                document.getElementById('storePhotoPreview').style.display = 'block';
+                const cur = document.getElementById('current_store_photo');
+                if (cur) cur.style.opacity = '0.5';
             }
             reader.readAsDataURL(input.files[0]);
         }

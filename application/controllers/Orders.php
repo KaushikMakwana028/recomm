@@ -93,7 +93,8 @@ class Orders extends MY_Controller
                     $resolved = resolve_order_distance($vendor->latitude, $vendor->longitude, $address->latitude, $address->longitude, true);
                     $new_dist = $resolved['distance_km'];
                     $new_method = $resolved['method'];
-                    $new_charge = calculate_delivery_charge_amount($new_dist, $order->delivery_type ?: 'normal');
+                    $chosen_slot = isset($order->chosen_time_option) ? $order->chosen_time_option : null;
+                    $new_charge = calculate_delivery_charge_amount($new_dist, $order->delivery_type ?: 'normal', $chosen_slot);
 
                     $new_option = ($order->delivery_option === 'self' || empty($order->delivery_option)) ? 'delivery_partner' : $order->delivery_option;
                     $new_total = round((float)$order->subtotal + (float)$order->gst_amount + $new_charge - (float)$order->discount, 2);
@@ -123,6 +124,9 @@ class Orders extends MY_Controller
             ->order_by('created_at', 'DESC')
             ->get_where('order_status_history', ['order_id' => $id])
             ->result();
+
+        $slot = !empty($order->chosen_time_option) ? $order->chosen_time_option : ($order->delivery_type === 'urgent' ? 'immediately' : 'immediately');
+        $data['delivery_breakdown'] = get_delivery_charge_breakdown($order->distance ?: 0, $slot, $order->delivery_type ?: 'normal');
 
         $data['order'] = $order;
         $data['items'] = $items;
@@ -170,7 +174,8 @@ class Orders extends MY_Controller
 
                 // Calculate delivery charge if distance is set
                 if ($distance !== null && $distance >= 0) {
-                    $delivery_charge = calculate_delivery_charge_amount($distance, $delivery_type);
+                    $chosen_slot = isset($order->chosen_time_option) ? $order->chosen_time_option : null;
+                    $delivery_charge = calculate_delivery_charge_amount($distance, $delivery_type, $chosen_slot);
                     $update_fields['delivery_charge'] = $delivery_charge;
                     $update_fields['total_amount'] = floatval($order->subtotal) + floatval($order->gst_amount) + $delivery_charge - floatval($order->discount);
                 } else {

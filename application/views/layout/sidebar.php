@@ -367,6 +367,12 @@
             </a>
         </li>
         <li>
+            <a href="<?= base_url('support-requests') ?>" class="<?= ($this->uri->segment(1) == 'support-requests' || $this->uri->segment(1) == 'support_requests') ? 'active' : '' ?>">
+                <i class="fas fa-headset"></i>
+                <span>Customer Support</span>
+            </a>
+        </li>
+        <li>
             <a href="<?= base_url('settings/delivery') ?>" class="<?= $this->uri->segment(1) == 'settings' ? 'active' : '' ?>">
                 <i class="fas fa-cog"></i>
                 <span>Settings</span>

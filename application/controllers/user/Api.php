@@ -15,6 +15,8 @@ class Api extends CI_Controller
     {
         parent::__construct();
 
+        date_default_timezone_set('Asia/Kolkata');
+
         // Load models and libraries
         $this->load->model('General_model');
         $this->load->library(['session', 'form_validation', 'upload']);
@@ -784,32 +786,106 @@ class Api extends CI_Controller
 
         $user_id = $this->authenticate();
 
-        $this->db->select('cart_items.id as cart_item_id, cart_items.quantity, cart_items.created_at as added_at, vp.id as product_id, vp.product_name as product_name, vp.mrp as price, vp.selling_price as sale_price, COALESCE(NULLIF(vp.image, ""), p.image) as image, categories.name as category_name');
+        $this->db->select('cart_items.id as cart_item_id, cart_items.quantity, cart_items.created_at as added_at, vp.id as product_id, vp.product_name as product_name, vp.mrp as price, vp.selling_price as sale_price, COALESCE(NULLIF(vp.image, ""), p.image) as image, categories.name as category_name, vp.vendor_id, u.name as vendor_name, u.store_name, u.store_photo, u.address as store_address, u.latitude as vendor_latitude, u.longitude as vendor_longitude');
         $this->db->from('cart_items');
         $this->db->join('vendor_products vp', 'vp.id = cart_items.product_id', 'inner');
         $this->db->join('products p', 'p.id = vp.product_id', 'left');
         $this->db->join('categories', 'categories.id = vp.category_id', 'left');
+        $this->db->join('users u', 'u.id = vp.vendor_id', 'left');
         $this->db->where('cart_items.user_id', $user_id);
         $this->db->where('vp.is_active', 1);
         $this->db->order_by('cart_items.id', 'ASC');
 
-        $items = $this->db->get()->result();
+        $raw_items = $this->db->get()->result();
 
-        $total_amount = 0.00;
-        $total_items = count($items);
+        // Customer location resolution for accurate per-store distance & delivery charges
+        $this->load->helper('distance');
+        $cust_lat = null;
+        $cust_lon = null;
+        $this->resolve_customer_location($cust_lat, $cust_lon);
+
+        $items = [];
+        $store_map = [];
+        $total_items = count($raw_items);
         $total_quantity = 0;
+        $items_subtotal = 0.00;
 
-        foreach ($items as $item) {
-            $item->price = floatval($item->price);
-            $item->sale_price = $item->sale_price !== null ? floatval($item->sale_price) : null;
-            $active_price = $item->sale_price !== null ? $item->sale_price : $item->price;
+        foreach ($raw_items as $raw) {
+            $raw->price = floatval($raw->price);
+            $raw->sale_price = $raw->sale_price !== null ? floatval($raw->sale_price) : null;
+            $active_price = $raw->sale_price !== null ? $raw->sale_price : $raw->price;
 
-            $item->item_total = $active_price * $item->quantity;
-            $total_amount += $item->item_total;
-            $total_quantity += $item->quantity;
+            $raw->item_total = round($active_price * (int)$raw->quantity, 2);
+            $items_subtotal += $raw->item_total;
+            $total_quantity += (int)$raw->quantity;
 
-            $item->image_url = !empty($item->image) ? base_url($item->image) : null;
+            $raw->image_url = !empty($raw->image) ? base_url($raw->image) : null;
+            $raw->store_photo_url = !empty($raw->store_photo) ? base_url($raw->store_photo) : null;
+            $raw->id = (int)$raw->product_id;
+            $raw->name = $raw->product_name;
+            if (!empty($raw->image_url)) {
+                $raw->image = $raw->image_url;
+            }
+
+            $v_id = (int)($raw->vendor_id ?? 0);
+            $v_name = !empty($raw->store_name) ? trim($raw->store_name) : (!empty($raw->vendor_name) ? trim($raw->vendor_name) : 'Store #' . $v_id);
+            $raw->store_name = $v_name;
+            $raw->vendor_id = $v_id;
+
+            $items[] = $raw;
+
+            if (!isset($store_map[$v_id])) {
+                $v_dist = null;
+                if ($cust_lat !== null && $cust_lon !== null && $raw->vendor_latitude !== null && $raw->vendor_longitude !== null && (float)$raw->vendor_latitude != 0 && (float)$raw->vendor_longitude != 0) {
+                    $v_dist = calculate_distance_km($cust_lat, $cust_lon, (float)$raw->vendor_latitude, (float)$raw->vendor_longitude);
+                }
+
+                $store_map[$v_id] = [
+                    'vendor_id' => $v_id,
+                    'vendor_name' => $raw->vendor_name ?? '',
+                    'store_name' => $v_name,
+                    'store_photo_url' => $raw->store_photo_url,
+                    'store_address' => $raw->store_address ?? '',
+                    'distance_km' => $v_dist !== null ? round($v_dist, 2) : null,
+                    'distance_text' => $v_dist !== null ? round($v_dist, 1) . ' km' : null,
+                    'items' => [],
+                    'items_count' => 0,
+                    'total_quantity' => 0,
+                    'subtotal' => 0.00,
+                    'delivery_charge' => 0.00,
+                    'discount' => 0.00,
+                    'store_total' => 0.00
+                ];
+            }
+
+            $store_map[$v_id]['items'][] = $raw;
+            $store_map[$v_id]['items_count']++;
+            $store_map[$v_id]['total_quantity'] += (int)$raw->quantity;
+            $store_map[$v_id]['subtotal'] += $raw->item_total;
         }
+
+        $store_groups = [];
+        $total_delivery_charge = 0.00;
+        $total_discount = 0.00;
+        $grand_total = 0.00;
+
+        foreach ($store_map as $v_id => $group) {
+            $group['subtotal'] = round($group['subtotal'], 2);
+            $dist = $group['distance_km'] ?? 0.00;
+            $del_charge = calculate_delivery_charge_amount($dist, 'normal');
+            $group['delivery_charge'] = round($del_charge, 2);
+            $group['discount'] = round($group['discount'], 2);
+            $group['store_total'] = round($group['subtotal'] + $group['delivery_charge'] - $group['discount'], 2);
+
+            $total_delivery_charge += $group['delivery_charge'];
+            $total_discount += $group['discount'];
+            $grand_total += $group['store_total'];
+
+            $store_groups[] = $group;
+        }
+
+        $stores_count = count($store_groups);
+        $is_multi_store = $stores_count > 1;
 
         return $this->output
             ->set_status_header(200)
@@ -819,10 +895,16 @@ class Api extends CI_Controller
                 'message' => 'Cart retrieved successfully',
                 'data' => [
                     'items' => $items,
+                    'store_groups' => $store_groups,
+                    'stores_count' => $stores_count,
+                    'is_multi_store' => $is_multi_store,
                     'summary' => [
                         'total_items' => $total_items,
                         'total_quantity' => $total_quantity,
-                        'total_amount' => $total_amount
+                        'subtotal' => round($items_subtotal, 2),
+                        'total_delivery_charge' => round($total_delivery_charge, 2),
+                        'total_discount' => round($total_discount, 2),
+                        'total_amount' => round($grand_total, 2)
                     ]
                 ]
             ]));
@@ -1357,6 +1439,873 @@ class Api extends CI_Controller
     }
 
     // ==========================================
+    // 4B. SAVED STORES & SHOPPING LISTS FLOW
+    // ==========================================
+
+    private function ensure_saved_stores_and_lists_tables()
+    {
+        if (!$this->db->table_exists('saved_stores')) {
+            $this->db->query("
+                CREATE TABLE IF NOT EXISTS `saved_stores` (
+                    `id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `customer_id` INT NOT NULL,
+                    `store_id` INT NOT NULL,
+                    `created_at` DATETIME NOT NULL,
+                    UNIQUE KEY `uniq_customer_store` (`customer_id`, `store_id`),
+                    KEY `idx_customer` (`customer_id`),
+                    KEY `idx_store` (`store_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+            ");
+        }
+
+        if (!$this->db->table_exists('shopping_lists')) {
+            $this->db->query("
+                CREATE TABLE IF NOT EXISTS `shopping_lists` (
+                    `id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `user_id` INT NOT NULL,
+                    `name` VARCHAR(150) NOT NULL,
+                    `created_at` DATETIME NOT NULL,
+                    `updated_at` DATETIME NOT NULL,
+                    KEY `idx_user` (`user_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+            ");
+        }
+
+        if (!$this->db->table_exists('shopping_list_items')) {
+            $this->db->query("
+                CREATE TABLE IF NOT EXISTS `shopping_list_items` (
+                    `id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `list_id` INT NOT NULL,
+                    `product_id` INT NOT NULL,
+                    `quantity` INT NOT NULL DEFAULT 1,
+                    `created_at` DATETIME NOT NULL,
+                    `updated_at` DATETIME NOT NULL,
+                    UNIQUE KEY `uniq_list_product` (`list_id`, `product_id`),
+                    KEY `idx_list` (`list_id`),
+                    KEY `idx_product` (`product_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+            ");
+        }
+    }
+
+    /**
+     * Save / bookmark a store for the authenticated customer
+     */
+    public function save_store()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $store_id = (int)($input['store_id'] ?? $this->input->get('store_id', true));
+
+        if ($store_id <= 0) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'Store ID is required',
+                'data' => null
+            ]));
+        }
+
+        $store = $this->db->get_where('users', ['id' => $store_id, 'role' => 'vendor', 'is_active' => 1])->row();
+        if (!$store) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Store not found or inactive',
+                'data' => null
+            ]));
+        }
+
+        $existing = $this->db->get_where('saved_stores', ['customer_id' => $user_id, 'store_id' => $store_id])->row();
+        if (!$existing) {
+            $this->db->insert('saved_stores', [
+                'customer_id' => $user_id,
+                'store_id'    => $store_id,
+                'created_at'  => date('Y-m-d H:i:s')
+            ]);
+        }
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Store saved successfully',
+            'data' => ['is_saved' => true, 'store_id' => $store_id]
+        ]));
+    }
+
+    /**
+     * Unsave a store for the authenticated customer
+     */
+    public function unsave_store()
+    {
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $store_id = (int)($input['store_id'] ?? $this->input->get('store_id', true));
+
+        if ($store_id <= 0) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'Store ID is required',
+                'data' => null
+            ]));
+        }
+
+        $this->db->delete('saved_stores', ['customer_id' => $user_id, 'store_id' => $store_id]);
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Store removed from saved stores',
+            'data' => ['is_saved' => false, 'store_id' => $store_id]
+        ]));
+    }
+
+    /**
+     * Check if a store is saved by the current customer
+     */
+    public function is_store_saved()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->get_optional_user_id();
+        $store_id = (int)$this->input->get('store_id', true);
+
+        if (!$user_id || $store_id <= 0) {
+            return $this->output->set_status_header(200)->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'data' => ['is_saved' => false]
+            ]));
+        }
+
+        $this->ensure_saved_stores_and_lists_tables();
+        $row = $this->db->get_where('saved_stores', ['customer_id' => $user_id, 'store_id' => $store_id])->row();
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'data' => ['is_saved' => ($row !== null)]
+        ]));
+    }
+
+    /**
+     * Get list of stores saved by the customer
+     */
+    public function get_saved_stores()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $this->resolve_customer_location($cust_lat, $cust_lon);
+        $this->load->helper('distance');
+
+        $saved_rows = $this->db
+            ->select('ss.id as saved_id, ss.created_at as saved_at, u.id as store_id, u.name, u.store_name, u.owner_name, u.address, u.pincode, u.latitude, u.longitude, u.opening_time, u.closing_time, u.is_holiday, u.store_status, u.store_photo, u.contact_number, u.is_active')
+            ->from('saved_stores ss')
+            ->join('users u', 'u.id = ss.store_id', 'inner')
+            ->where('ss.customer_id', $user_id)
+            ->order_by('ss.created_at', 'DESC')
+            ->get()
+            ->result();
+
+        $stores = [];
+        $now_time = date('H:i:s');
+
+        foreach ($saved_rows as $v) {
+            if ((int)$v->is_active !== 1) continue;
+
+            $dist = ($cust_lat !== null && $cust_lon !== null && is_numeric($v->latitude) && is_numeric($v->longitude))
+                ? calculate_distance_km($cust_lat, $cust_lon, $v->latitude, $v->longitude)
+                : null;
+
+            $is_open = true;
+            if (isset($v->store_status) && strtolower((string)$v->store_status) === 'closed') {
+                $is_open = false;
+            } elseif (isset($v->is_holiday) && (int)$v->is_holiday === 1) {
+                $is_open = false;
+            } elseif (!empty($v->opening_time) && !empty($v->closing_time) && $v->opening_time !== '00:00:00' && $v->closing_time !== '00:00:00') {
+                if ($v->opening_time <= $v->closing_time) {
+                    $is_open = ($now_time >= $v->opening_time && $now_time <= $v->closing_time);
+                } else {
+                    $is_open = ($now_time >= $v->opening_time || $now_time <= $v->closing_time);
+                }
+            }
+
+            $total_products = $this->db
+                ->where('vendor_id', $v->store_id)
+                ->where('is_active', 1)
+                ->where('stock >', 0)
+                ->count_all_results('vendor_products');
+
+            $categories = $this->db
+                ->select('c.name')
+                ->from('vendor_products vp')
+                ->join('categories c', 'c.id = vp.category_id')
+                ->where('vp.vendor_id', $v->store_id)
+                ->where('vp.is_active', 1)
+                ->where('vp.stock >', 0)
+                ->group_by('c.id')
+                ->limit(3)
+                ->get()
+                ->result();
+
+            $category_names = array_map(function($c) { return $c->name; }, $categories);
+            $category_summary = !empty($category_names) ? implode(', ', $category_names) : 'General Grocery';
+
+            $stores[] = [
+                'saved_id'         => (int)$v->saved_id,
+                'store_id'         => (int)$v->store_id,
+                'id'               => (int)$v->store_id,
+                'store_name'       => !empty($v->store_name) ? $v->store_name : $v->name,
+                'name'             => $v->name,
+                'store_photo_url'  => !empty($v->store_photo) ? base_url($v->store_photo) : null,
+                'address'          => $v->address,
+                'pincode'          => $v->pincode,
+                'contact_number'   => $v->contact_number,
+                'distance_km'      => $dist !== null ? round((float)$dist, 2) : null,
+                'distance_text'    => $dist !== null ? ($dist < 1 ? round($dist * 1000) . ' m' : round($dist, 1) . ' km') : null,
+                'is_open'          => $is_open,
+                'status_label'     => $is_open ? 'Open' : 'Closed',
+                'category_summary' => $category_summary,
+                'total_products'   => (int)$total_products,
+                'saved_at'         => $v->saved_at,
+                'is_saved'         => true
+            ];
+        }
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Saved stores retrieved successfully',
+            'data' => [
+                'stores' => $stores,
+                'total' => count($stores)
+            ]
+        ]));
+    }
+
+    /**
+    /**
+     * Helper to fetch and format items of a shopping list
+     */
+    private function _fetch_list_items($list_id)
+    {
+        $items = $this->db
+            ->select('sli.id as list_item_id, sli.quantity, sli.created_at as added_at,
+                      COALESCE(vp.id, sli.product_id) as product_id,
+                      COALESCE(vp.product_name, p.name, "Product") as product_name,
+                      COALESCE(vp.mrp, p.price, 0) as price,
+                      COALESCE(vp.selling_price, p.sale_price, p.price, 0) as sale_price,
+                      COALESCE(vp.stock, 0) as stock_quantity,
+                      COALESCE(vp.is_active, p.is_active, 1) as is_active,
+                      COALESCE(NULLIF(vp.image, ""), p.image, "") as image,
+                      COALESCE(c.name, "") as category_name,
+                      COALESCE(vp.vendor_id, 0) as vendor_id,
+                      COALESCE(u.store_name, u.name, "") as store_name,
+                      u.name as vendor_name')
+            ->from('shopping_list_items sli')
+            ->join('vendor_products vp', 'vp.id = sli.product_id', 'left')
+            ->join('products p', 'p.id = COALESCE(vp.product_id, sli.product_id)', 'left')
+            ->join('categories c', 'c.id = COALESCE(vp.category_id, p.category_id)', 'left')
+            ->join('users u', 'u.id = vp.vendor_id', 'left')
+            ->where('sli.list_id', $list_id)
+            ->order_by('sli.id', 'DESC')
+            ->get()
+            ->result();
+
+        $formatted = [];
+        foreach ($items as $it) {
+            $sname = !empty($it->store_name) ? $it->store_name : ($it->vendor_name ?? (!empty($it->vendor_id) ? 'Store #' . $it->vendor_id : ''));
+            $formatted[] = [
+                'list_item_id'   => (int)$it->list_item_id,
+                'id'             => (int)$it->product_id,
+                'product_id'     => (int)$it->product_id,
+                'name'           => $it->product_name,
+                'product_name'   => $it->product_name,
+                'price'          => (float)$it->price,
+                'sale_price'     => (float)($it->sale_price ?? $it->price),
+                'image'          => !empty($it->image) ? $this->get_product_image_url($it->image) : '',
+                'image_url'      => !empty($it->image) ? $this->get_product_image_url($it->image) : '',
+                'category_name'  => $it->category_name ?? '',
+                'vendor_id'      => (int)$it->vendor_id,
+                'store_name'     => $sname,
+                'quantity'       => (int)$it->quantity,
+                'stock'          => (int)$it->stock_quantity,
+                'is_active'      => (bool)$it->is_active,
+                'is_available'   => (bool)($it->is_active && $it->stock_quantity > 0),
+                'added_at'       => $it->added_at
+            ];
+        }
+        return $formatted;
+    }
+
+    /**
+     * Helper to resolve product (supports vendor_products.id and master products.id)
+     */
+    private function _resolve_product_for_list($product_id)
+    {
+        // 1. Direct vendor_products.id
+        $vp = $this->db->get_where('vendor_products', ['id' => $product_id, 'is_active' => 1])->row();
+        if ($vp) {
+            return $vp;
+        }
+
+        // 2. Check if product_id is master products.id with an active vendor_product
+        $vp = $this->db
+            ->where('product_id', $product_id)
+            ->where('is_active', 1)
+            ->order_by('selling_price', 'ASC')
+            ->get('vendor_products')
+            ->row();
+        if ($vp) {
+            return $vp;
+        }
+
+        // 3. Fallback: master products table
+        $p = $this->db->get_where('products', ['id' => $product_id, 'is_active' => 1])->row();
+        if ($p) {
+            return (object)[
+                'id'           => (int)$p->id,
+                'product_name' => $p->name,
+                'selling_price'=> $p->sale_price ?: $p->price,
+                'mrp'          => $p->price,
+                'stock'        => 999,
+                'is_active'    => 1,
+                'vendor_id'    => 0
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Get list of shopping lists for customer
+     */
+    public function get_shopping_lists()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $lists = $this->db
+            ->where('user_id', $user_id)
+            ->order_by('updated_at', 'DESC')
+            ->get('shopping_lists')
+            ->result();
+
+        $data = [];
+        foreach ($lists as $l) {
+            $formatted_items = $this->_fetch_list_items($l->id);
+
+            $preview_images = [];
+            foreach ($formatted_items as $fi) {
+                if (!empty($fi['image_url']) && count($preview_images) < 4) {
+                    $preview_images[] = $fi['image_url'];
+                }
+            }
+
+            $data[] = [
+                'id'             => (int)$l->id,
+                'name'           => $l->name,
+                'items_count'    => count($formatted_items),
+                'items'          => $formatted_items,
+                'preview_images' => $preview_images,
+                'created_at'     => $l->created_at,
+                'updated_at'     => $l->updated_at
+            ];
+        }
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Shopping lists fetched successfully',
+            'data' => [
+                'lists' => $data,
+                'total' => count($data)
+            ]
+        ]));
+    }
+
+    /**
+     * Create a new named shopping list
+     */
+    public function create_shopping_list()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $name = trim($input['name'] ?? '');
+
+        if ($name === '') {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'List name is required',
+                'data' => null
+            ]));
+        }
+
+        if (mb_strlen($name) > 150) {
+            $name = mb_substr($name, 0, 150);
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $this->db->insert('shopping_lists', [
+            'user_id'    => $user_id,
+            'name'       => $name,
+            'created_at' => $now,
+            'updated_at' => $now
+        ]);
+
+        $new_id = (int)$this->db->insert_id();
+
+        // Optional initial product to add
+        $product_id = (int)($input['product_id'] ?? 0);
+        $added_initial = false;
+        if ($product_id > 0) {
+            $product = $this->_resolve_product_for_list($product_id);
+            if ($product) {
+                $actual_pid = (int)$product->id;
+                $this->db->insert('shopping_list_items', [
+                    'list_id'    => $new_id,
+                    'product_id' => $actual_pid,
+                    'quantity'   => max(1, (int)($input['quantity'] ?? 1)),
+                    'created_at' => $now,
+                    'updated_at' => $now
+                ]);
+                $added_initial = true;
+            }
+        }
+
+        $list_items = $this->_fetch_list_items($new_id);
+
+        return $this->output->set_status_header(201)->set_output(json_encode([
+            'status' => true,
+            'code' => 201,
+            'message' => 'Shopping list created successfully',
+            'data' => [
+                'id'             => $new_id,
+                'name'           => $name,
+                'items_count'    => count($list_items),
+                'items'          => $list_items,
+                'preview_images' => !empty($list_items) && !empty($list_items[0]['image_url']) ? [$list_items[0]['image_url']] : [],
+                'created_at'     => $now,
+                'updated_at'     => $now
+            ]
+        ]));
+    }
+
+    /**
+     * Rename an existing shopping list
+     */
+    public function rename_shopping_list()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $list_id = (int)($input['list_id'] ?? 0);
+        $name = trim($input['name'] ?? '');
+
+        if ($list_id <= 0 || $name === '') {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'List ID and non-empty name are required',
+                'data' => null
+            ]));
+        }
+
+        $list = $this->db->get_where('shopping_lists', ['id' => $list_id, 'user_id' => $user_id])->row();
+        if (!$list) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Shopping list not found',
+                'data' => null
+            ]));
+        }
+
+        $this->db->where('id', $list_id)->update('shopping_lists', [
+            'name'       => $name,
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Shopping list renamed successfully',
+            'data' => ['id' => $list_id, 'name' => $name]
+        ]));
+    }
+
+    /**
+     * Delete a shopping list and all its items
+     */
+    public function delete_shopping_list()
+    {
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $list_id = (int)($input['list_id'] ?? $this->input->get('list_id', true));
+
+        if ($list_id <= 0) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'List ID is required',
+                'data' => null
+            ]));
+        }
+
+        $list = $this->db->get_where('shopping_lists', ['id' => $list_id, 'user_id' => $user_id])->row();
+        if (!$list) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Shopping list not found',
+                'data' => null
+            ]));
+        }
+
+        $this->db->delete('shopping_list_items', ['list_id' => $list_id]);
+        $this->db->delete('shopping_lists', ['id' => $list_id, 'user_id' => $user_id]);
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Shopping list deleted successfully',
+            'data' => ['id' => $list_id]
+        ]));
+    }
+
+    /**
+     * Get items inside a shopping list
+     */
+    public function get_shopping_list_items()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $list_id = (int)$this->input->get('list_id', true);
+        if ($list_id <= 0) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'Shopping list ID is required',
+                'data' => null
+            ]));
+        }
+
+        $list = $this->db->get_where('shopping_lists', ['id' => $list_id, 'user_id' => $user_id])->row();
+        if (!$list) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Shopping list not found',
+                'data' => null
+            ]));
+        }
+
+        $formatted = $this->_fetch_list_items($list_id);
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Shopping list items retrieved successfully',
+            'data' => [
+                'list' => [
+                    'id'          => (int)$list->id,
+                    'name'        => $list->name,
+                    'items_count' => count($formatted),
+                    'created_at'  => $list->created_at,
+                    'updated_at'  => $list->updated_at
+                ],
+                'items' => $formatted
+            ]
+        ]));
+    }
+
+    /**
+     * Add a product to a shopping list
+     */
+    public function add_to_shopping_list()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $list_id = (int)($input['list_id'] ?? 0);
+        $product_id = (int)($input['product_id'] ?? 0);
+        $quantity = max(1, (int)($input['quantity'] ?? 1));
+
+        if ($list_id <= 0 || $product_id <= 0) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'List ID and Product ID are required',
+                'data' => null
+            ]));
+        }
+
+        $list = $this->db->get_where('shopping_lists', ['id' => $list_id, 'user_id' => $user_id])->row();
+        if (!$list) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Shopping list not found',
+                'data' => null
+            ]));
+        }
+
+        $product = $this->_resolve_product_for_list($product_id);
+        if (!$product) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Product not found or inactive',
+                'data' => null
+            ]));
+        }
+
+        $actual_pid = (int)$product->id;
+
+        $existing = $this->db->get_where('shopping_list_items', [
+            'list_id'    => $list_id,
+            'product_id' => $actual_pid
+        ])->row();
+
+        if ($existing) {
+            $this->db->where('id', $existing->id)->update('shopping_list_items', [
+                'quantity'   => $existing->quantity + $quantity,
+                'updated_at' => date('Y-m-d H:i:s')
+            ]);
+        } else {
+            $this->db->insert('shopping_list_items', [
+                'list_id'    => $list_id,
+                'product_id' => $actual_pid,
+                'quantity'   => $quantity,
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s')
+            ]);
+        }
+
+        $this->db->where('id', $list_id)->update('shopping_lists', [
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => "Added {$product->product_name} to '{$list->name}'",
+            'data' => [
+                'list_id'    => $list_id,
+                'product_id' => $actual_pid,
+                'list_name'  => $list->name
+            ]
+        ]));
+    }
+
+    /**
+     * Remove a product from a shopping list
+     */
+    public function remove_from_shopping_list()
+    {
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $list_id = (int)($input['list_id'] ?? $this->input->get('list_id', true));
+        $product_id = (int)($input['product_id'] ?? $this->input->get('product_id', true));
+
+        if ($list_id <= 0 || $product_id <= 0) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'List ID and Product ID are required',
+                'data' => null
+            ]));
+        }
+
+        $list = $this->db->get_where('shopping_lists', ['id' => $list_id, 'user_id' => $user_id])->row();
+        if (!$list) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Shopping list not found',
+                'data' => null
+            ]));
+        }
+
+        // Remove by matching product_id OR list_item_id
+        $this->db->group_start()
+            ->where('product_id', $product_id)
+            ->or_where('id', $product_id)
+            ->group_end()
+            ->where('list_id', $list_id)
+            ->delete('shopping_list_items');
+
+        $this->db->where('id', $list_id)->update('shopping_lists', [
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => 'Product removed from shopping list',
+            'data' => null
+        ]));
+    }
+
+    /**
+     * Add every product in a shopping list to cart in one action
+     */
+    public function shopping_list_add_all_to_cart()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_saved_stores_and_lists_tables();
+        $this->check_cart_table();
+
+        $input = json_decode($this->input->raw_input_stream, true) ?: $this->input->post();
+        $list_id = (int)($input['list_id'] ?? 0);
+
+        if ($list_id <= 0) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'Shopping list ID is required',
+                'data' => null
+            ]));
+        }
+
+        $list = $this->db->get_where('shopping_lists', ['id' => $list_id, 'user_id' => $user_id])->row();
+        if (!$list) {
+            return $this->output->set_status_header(404)->set_output(json_encode([
+                'status' => false,
+                'code' => 404,
+                'message' => 'Shopping list not found',
+                'data' => null
+            ]));
+        }
+
+        $list_items = $this->db->get_where('shopping_list_items', ['list_id' => $list_id])->result();
+        if (empty($list_items)) {
+            return $this->output->set_status_header(400)->set_output(json_encode([
+                'status' => false,
+                'code' => 400,
+                'message' => 'Shopping list is empty',
+                'data' => null
+            ]));
+        }
+
+        $added_count = 0;
+        $this->db->trans_begin();
+
+        foreach ($list_items as $item) {
+            $vp = $this->db->get_where('vendor_products', ['id' => $item->product_id, 'is_active' => 1])->row();
+            if (!$vp) {
+                // If item->product_id was a master products.id, resolve to active vendor_product
+                $vp = $this->db
+                    ->where('product_id', $item->product_id)
+                    ->where('is_active', 1)
+                    ->where('stock >', 0)
+                    ->order_by('selling_price', 'ASC')
+                    ->get('vendor_products')
+                    ->row();
+            }
+
+            if (!$vp || (int)$vp->stock <= 0) {
+                continue;
+            }
+
+            $desired_qty = max(1, (int)$item->quantity);
+            $cart_product_id = (int)$vp->id;
+
+            $existing_cart = $this->db->get_where('cart_items', [
+                'user_id'    => $user_id,
+                'product_id' => $cart_product_id
+            ])->row();
+
+            if ($existing_cart) {
+                $new_qty = min((int)$vp->stock, (int)$existing_cart->quantity + $desired_qty);
+                $this->db->where('id', $existing_cart->id)->update('cart_items', [
+                    'quantity' => $new_qty
+                ]);
+            } else {
+                $initial_qty = min((int)$vp->stock, $desired_qty);
+                $this->db->insert('cart_items', [
+                    'user_id'    => $user_id,
+                    'product_id' => $cart_product_id,
+                    'quantity'   => $initial_qty,
+                    'created_at' => date('Y-m-d H:i:s')
+                ]);
+            }
+            $added_count++;
+        }
+
+        if ($this->db->trans_status() === false) {
+            $this->db->trans_rollback();
+            return $this->output->set_status_header(500)->set_output(json_encode([
+                'status' => false,
+                'code' => 500,
+                'message' => 'Failed to add items to cart',
+                'data' => null
+            ]));
+        }
+
+        $this->db->trans_commit();
+
+        return $this->output->set_status_header(200)->set_output(json_encode([
+            'status' => true,
+            'code' => 200,
+            'message' => $added_count > 0
+                ? "Added {$added_count} item(s) from '{$list->name}' to cart"
+                : "No in-stock items available in this list to add",
+            'data' => [
+                'added_count' => $added_count,
+                'list_id'     => $list_id
+            ]
+        ]));
+    }
+
+    // ==========================================
     // 5. ADDRESS MANAGEMENT FLOW
     // ==========================================
 
@@ -1699,6 +2648,14 @@ class Api extends CI_Controller
         $delivery_type   = isset($input_data['delivery_type']) ? trim($input_data['delivery_type']) : 'normal'; // 'normal' or 'urgent'
         $delivery_option = !empty($input_data['delivery_option']) ? trim($input_data['delivery_option']) : 'delivery_partner'; // 'delivery_partner' or 'self'
 
+        // Calculate delivery time slot window
+        $chosen_time_option = isset($input_data['chosen_time_option']) && !empty($input_data['chosen_time_option']) ? trim(strtolower($input_data['chosen_time_option'])) : 'later';
+        $allowed_options = ['immediately', 'later', 'lunch', 'dinner', 'custom'];
+        if (!in_array($chosen_time_option, $allowed_options, true)) {
+            $chosen_time_option = 'later';
+        }
+        $custom_delivery_time = isset($input_data['custom_delivery_time']) && !empty($input_data['custom_delivery_time']) ? trim($input_data['custom_delivery_time']) : null;
+
         if ($address_id <= 0) {
             return $this->output
                 ->set_status_header(400)
@@ -1767,60 +2724,82 @@ class Api extends CI_Controller
             }
         }
 
-        // Server-side distance and delivery charge calculation (Never trust client distance or delivery_charge)
-        $this->load->helper('distance');
-        $vendor_id = (int) ($cart_summary['items'][0]['vendor_id'] ?? 0);
-        $vendor = null;
-        if ($vendor_id > 0) {
-            $vendor = $this->db->select('id, address, pincode, latitude, longitude, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, opening_time, closing_time, is_holiday')->get_where('users', ['id' => $vendor_id])->row();
+        // Group cart items by vendor for accurate per-store delivery fee calculation
+        $vendor_groups = [];
+        foreach ($cart_summary['items'] as $ci) {
+            $v_id = (int) ($ci['vendor_id'] ?? 0);
+            if (!isset($vendor_groups[$v_id])) {
+                $vendor_groups[$v_id] = [
+                    'vendor_id' => $v_id,
+                    'items' => [],
+                    'subtotal' => 0.00,
+                    'total_gst' => 0.00,
+                    'total_quantity' => 0
+                ];
+            }
+            $vendor_groups[$v_id]['items'][] = $ci;
+            $vendor_groups[$v_id]['subtotal'] += $ci['line_total'];
+            $vendor_groups[$v_id]['total_gst'] += $ci['gst_amount'];
+            $vendor_groups[$v_id]['total_quantity'] += $ci['quantity'];
         }
 
+        $this->load->helper('distance');
         if ($address) {
             geocode_address_if_needed($address);
         }
-        if ($vendor) {
-            geocode_vendor_if_needed($vendor);
-        }
 
-        $distance = null;
+        // Calculate delivery charges across all stores in the cart (sum of per-store delivery charges)
+        $total_delivery_charge = 0.00;
+        $max_distance = 0.00;
         $distance_method = 'pure_math';
+        $primary_vendor = null;
 
-        if (
-            $vendor && $address &&
-            $vendor->latitude !== null && $vendor->longitude !== null &&
-            $address->latitude !== null && $address->longitude !== null &&
-            (float) $vendor->latitude != 0 && (float) $vendor->longitude != 0 &&
-            (float) $address->latitude != 0 && (float) $address->longitude != 0
-        ) {
-            // Attempt road routing with 2-second timeout, silently falling back to pure math
-            $resolved = resolve_order_distance($vendor->latitude, $vendor->longitude, $address->latitude, $address->longitude, true);
-            $distance = $resolved['distance_km'];
-            $distance_method = $resolved['method'];
-        }
-
-        // Graceful fallback if coordinates are missing on either side
-        if ($distance === null) {
-            if (isset($input_data['distance']) && $input_data['distance'] !== '' && is_numeric($input_data['distance']) && floatval($input_data['distance']) >= 0) {
-                $distance = floatval($input_data['distance']);
-            } else {
-                $distance = 0.00;
+        foreach ($vendor_groups as $v_id => $group) {
+            $vendor = null;
+            if ($v_id > 0) {
+                $vendor = $this->db->select('id, address, pincode, latitude, longitude, prep_time_minutes, lunch_window_start, lunch_window_end, dinner_window_start, dinner_window_end, slot_immediately_enabled, slot_later_enabled, slot_lunch_enabled, slot_dinner_enabled, slot_custom_enabled, opening_time, closing_time, is_holiday')->get_where('users', ['id' => $v_id])->row();
             }
-            $distance_method = 'pure_math';
+            if ($vendor) {
+                geocode_vendor_if_needed($vendor);
+                if (!$primary_vendor) {
+                    $primary_vendor = $vendor;
+                }
+            }
+
+            $v_dist = null;
+            if (
+                $vendor && $address &&
+                $vendor->latitude !== null && $vendor->longitude !== null &&
+                $address->latitude !== null && $address->longitude !== null &&
+                (float) $vendor->latitude != 0 && (float) $vendor->longitude != 0 &&
+                (float) $address->latitude != 0 && (float) $address->longitude != 0
+            ) {
+                $resolved = resolve_order_distance($vendor->latitude, $vendor->longitude, $address->latitude, $address->longitude, true);
+                $v_dist = (float) $resolved['distance_km'];
+                $distance_method = $resolved['method'];
+            }
+
+            if ($v_dist === null) {
+                if (isset($input_data['distance']) && $input_data['distance'] !== '' && is_numeric($input_data['distance']) && floatval($input_data['distance']) >= 0) {
+                    $v_dist = floatval($input_data['distance']);
+                } else {
+                    $v_dist = 0.00;
+                }
+            }
+
+            $v_charge = calculate_delivery_charge_amount($v_dist, $delivery_type, $chosen_time_option);
+            $total_delivery_charge += $v_charge;
+            if ($v_dist > $max_distance) {
+                $max_distance = $v_dist;
+            }
         }
 
-        $delivery_charge = calculate_delivery_charge_amount($distance, $delivery_type);
-
-        // Calculate delivery time slot window
-        $chosen_time_option = isset($input_data['chosen_time_option']) ? trim(strtolower($input_data['chosen_time_option'])) : 'immediately';
-        $allowed_options = ['immediately', 'later', 'lunch', 'dinner', 'custom'];
-        if (!in_array($chosen_time_option, $allowed_options, true)) {
-            $chosen_time_option = 'immediately';
-        }
-        $custom_delivery_time = isset($input_data['custom_delivery_time']) && !empty($input_data['custom_delivery_time']) ? trim($input_data['custom_delivery_time']) : null;
+        $delivery_charge = round($total_delivery_charge, 2);
+        $distance = round($max_distance, 2);
 
         $order_time = time();
         $calc_window = function_exists('calculate_order_delivery_window')
-            ? calculate_order_delivery_window($order_time, $vendor, $distance, $chosen_time_option, $custom_delivery_time)
+            ? calculate_order_delivery_window($order_time, $primary_vendor, $distance, $chosen_time_option, $custom_delivery_time)
             : ['window_start_dt' => null, 'window_end_dt' => null, 'window_display' => ''];
         $estimated_window_start = $calc_window['window_start_dt'];
         $estimated_window_end = $calc_window['window_end_dt'];
@@ -2007,6 +2986,7 @@ class Api extends CI_Controller
         }
 
         $delivery_type = isset($input_data['delivery_type']) ? trim($input_data['delivery_type']) : 'normal'; // 'normal' or 'urgent'
+        $chosen_time_option = isset($input_data['chosen_time_option']) && !empty($input_data['chosen_time_option']) ? trim(strtolower($input_data['chosen_time_option'])) : ($delivery_type === 'urgent' ? 'immediately' : 'later');
         $address_id = (int) ($input_data['address_id'] ?? 0);
 
         // Resolve customer address coordinates
@@ -2030,9 +3010,83 @@ class Api extends CI_Controller
 
         // Resolve vendor coordinates from cart items or vendor_id
         $vendor_id = (int) ($input_data['vendor_id'] ?? 0);
-        if ($vendor_id <= 0) {
-            $cart_summary = $this->get_cart_summary_for_order($user_id);
-            if (!empty($cart_summary['items'])) {
+        $cart_summary = $this->get_cart_summary_for_order($user_id);
+
+        if ($vendor_id <= 0 && !empty($cart_summary['items'])) {
+            $vendor_items_map = [];
+            foreach ($cart_summary['items'] as $ci) {
+                $vi = (int) ($ci['vendor_id'] ?? 0);
+                if ($vi > 0) {
+                    $vendor_items_map[$vi][] = $ci;
+                }
+            }
+
+            if (count($vendor_items_map) > 1) {
+                // Multi-store cart delivery calculation
+                $this->load->helper('distance');
+                if ($address) {
+                    geocode_address_if_needed($address);
+                }
+
+                $total_multi_delivery = 0.00;
+                $store_charges = [];
+                $rate_per_km = get_delivery_charge_per_km();
+
+                foreach ($vendor_items_map as $vi => $items_list) {
+                    $v_row = $this->db->select('id, name, store_name, address, pincode, latitude, longitude')->get_where('users', ['id' => $vi])->row();
+                    if ($v_row) {
+                        geocode_vendor_if_needed($v_row);
+                    }
+
+                    $v_dist = 0.00;
+                    if (
+                        $v_row && $address &&
+                        $v_row->latitude !== null && $v_row->longitude !== null &&
+                        $address->latitude !== null && $address->longitude !== null &&
+                        (float) $v_row->latitude != 0 && (float) $v_row->longitude != 0 &&
+                        (float) $address->latitude != 0 && (float) $address->longitude != 0
+                    ) {
+                        $res = resolve_order_distance($v_row->latitude, $v_row->longitude, $address->latitude, $address->longitude, true);
+                        $v_dist = (float) ($res['distance_km'] ?? 0);
+                    }
+
+                    $v_charge = calculate_delivery_charge_amount($v_dist, $delivery_type, $chosen_time_option);
+                    $total_multi_delivery += $v_charge;
+
+                    $store_charges[] = [
+                        'vendor_id' => $vi,
+                        'store_name' => !empty($v_row->store_name) ? $v_row->store_name : ($v_row->name ?? 'Store #' . $vi),
+                        'distance_km' => round($v_dist, 2),
+                        'delivery_charge' => round($v_charge, 2),
+                    ];
+                }
+
+                $immediate_extra = function_exists('get_immediate_delivery_charge') ? get_immediate_delivery_charge() : 50.00;
+
+                return $this->output
+                    ->set_status_header(200)
+                    ->set_output(json_encode([
+                        'status' => true,
+                        'code' => 200,
+                        'message' => 'Multi-store delivery charges calculated successfully.',
+                        'data' => [
+                            'is_multi_store'            => true,
+                            'stores_count'              => count($store_charges),
+                            'store_charges'             => $store_charges,
+                            'delivery_type'             => $delivery_type,
+                            'chosen_time_option'        => $chosen_time_option,
+                            'rate_per_km'               => $rate_per_km,
+                            'base_delivery_charge'      => round($total_multi_delivery, 2),
+                            'immediate_delivery_charge' => $immediate_extra,
+                            'extra_delivery_charge'     => 0.00,
+                            'total_delivery_charge'     => round($total_multi_delivery, 2),
+                            'delivery_charge'           => round($total_multi_delivery, 2),
+                            'distance'                  => $store_charges[0]['distance_km'] ?? 0,
+                            'distance_km'               => $store_charges[0]['distance_km'] ?? 0,
+                            'slots'                     => []
+                        ]
+                    ]));
+            } else if (!empty($cart_summary['items'])) {
                 $vendor_id = (int) ($cart_summary['items'][0]['vendor_id'] ?? 0);
             }
         }
@@ -2074,10 +3128,14 @@ class Api extends CI_Controller
             }
         }
 
-        $rate_per_km = get_delivery_charge_per_km();
-        $base_charge = round($distance * $rate_per_km, 2);
-        $extra_charge = ($delivery_type === 'urgent') ? 50.00 : 0.00;
-        $delivery_charge = round($base_charge + $extra_charge, 2);
+        $breakdown = get_delivery_charge_breakdown($distance, $chosen_time_option, $delivery_type);
+        $rate_per_km = $breakdown['rate_per_km'];
+        $billed_distance_km = $breakdown['billed_distance_km'];
+        $base_charge = $breakdown['base_charge'];
+        $extra_charge = $breakdown['extra_charge'];
+        $immediate_delivery_charge = $breakdown['immediate_delivery_charge'];
+        $is_immediate = $breakdown['is_immediate'];
+        $delivery_charge = $breakdown['total_delivery_charge'];
 
         $slots = function_exists('get_vendor_available_delivery_slots') ? get_vendor_available_delivery_slots($vendor, $distance) : [];
 
@@ -2088,16 +3146,20 @@ class Api extends CI_Controller
                 'code' => 200,
                 'message' => 'Delivery charge calculated successfully.',
                 'data' => [
-                    'distance'              => $distance,
-                    'distance_km'           => $distance,
-                    'distance_method'       => $distance_method,
-                    'delivery_type'         => $delivery_type,
-                    'rate_per_km'           => $rate_per_km,
-                    'base_delivery_charge'  => $base_charge,
-                    'extra_delivery_charge' => $extra_charge,
-                    'total_delivery_charge' => $delivery_charge,
-                    'delivery_charge'       => $delivery_charge,
-                    'slots'                 => $slots
+                    'distance'                  => $distance,
+                    'distance_km'               => $distance,
+                    'billed_distance_km'        => $billed_distance_km,
+                    'distance_method'           => $distance_method,
+                    'delivery_type'             => $delivery_type,
+                    'chosen_time_option'        => $chosen_time_option,
+                    'rate_per_km'               => $rate_per_km,
+                    'base_delivery_charge'      => $base_charge,
+                    'immediate_delivery_charge' => $immediate_delivery_charge,
+                    'is_immediate'              => $is_immediate,
+                    'extra_delivery_charge'     => $extra_charge,
+                    'total_delivery_charge'     => $delivery_charge,
+                    'delivery_charge'           => $delivery_charge,
+                    'slots'                     => $slots
                 ]
             ]));
     }
@@ -2267,6 +3329,31 @@ class Api extends CI_Controller
                 ? $this->get_product_image_url($first_item->product_image)
                 : '';
 
+            $store_rows = $this->db
+                ->distinct()
+                ->select('oi.vendor_id, u.store_name, u.name as vendor_name')
+                ->from('order_items oi')
+                ->join('users u', 'u.id = oi.vendor_id', 'left')
+                ->where('oi.order_id', $order->id)
+                ->get()
+                ->result_array();
+
+            $store_names = [];
+            $stores = [];
+            foreach ($store_rows as $sr) {
+                $name = !empty($sr['store_name']) ? $sr['store_name'] : ($sr['vendor_name'] ?? '');
+                $vid = !empty($sr['vendor_id']) ? (int)$sr['vendor_id'] : null;
+                if (!empty($name) && !in_array($name, $store_names, true)) {
+                    $store_names[] = $name;
+                }
+                if ($vid && !isset($stores[$vid])) {
+                    $stores[$vid] = [
+                        'vendor_id'  => $vid,
+                        'store_name' => $name ?: 'Store'
+                    ];
+                }
+            }
+
             return [
                 'order_id'          => (int) $order->id,
                 'order_number'      => $order->order_number,
@@ -2288,6 +3375,9 @@ class Api extends CI_Controller
                 'custom_delivery_time'       => $order->custom_delivery_time ?? null,
                 'first_item_name'   => $first_item->product_name ?? '',
                 'first_item_image'  => $image_url,
+                'store_names'       => $store_names,
+                'stores'            => array_values($stores),
+                'stores_count'      => count($store_names),
                 'created_at'        => $order->created_at,
                 'invoice_url'       => in_array($order->status, ['out_for_delivery', 'delivered'], true) && !empty($order->invoice_url) ? base_url($order->invoice_url) : (in_array($order->status, ['out_for_delivery', 'delivered'], true) ? base_url('api/user/order_invoice/' . $order->id) : null),
                 'can_download_invoice' => in_array($order->status, ['out_for_delivery', 'delivered'], true),
@@ -2518,6 +3608,253 @@ class Api extends CI_Controller
                 'data' => [
                     'order_id'     => $order_id,
                     'order_number' => $order->order_number
+                ]
+            ]));
+    }
+
+    /**
+     * Ensure support_requests table exists with schema
+     */
+    private function ensure_support_requests_table()
+    {
+        if (!$this->db->table_exists('support_requests')) {
+            $this->db->query("CREATE TABLE IF NOT EXISTS `support_requests` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `ticket_number` VARCHAR(32) NOT NULL UNIQUE,
+              `order_id` INT NOT NULL,
+              `customer_id` INT NOT NULL,
+              `category` VARCHAR(100) NOT NULL,
+              `description` TEXT NOT NULL,
+              `status` ENUM('Open', 'In Progress', 'Resolved') NOT NULL DEFAULT 'Open',
+              `admin_response` TEXT NULL,
+              `resolved_at` DATETIME NULL,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX `idx_support_order` (`order_id`),
+              INDEX `idx_support_customer` (`customer_id`),
+              INDEX `idx_support_status` (`status`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+        }
+    }
+
+    /**
+     * Customer support request creation for an order
+     */
+    public function create_support_request()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_support_requests_table();
+        $this->ensure_orders_table();
+
+        $input_data = json_decode($this->input->raw_input_stream, true);
+        if (empty($input_data)) {
+            $input_data = $this->input->post();
+        }
+
+        $order_id    = intval($input_data['order_id'] ?? 0);
+        $category    = trim($input_data['category'] ?? '');
+        $description = trim($input_data['description'] ?? '');
+
+        if ($order_id <= 0) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 400,
+                    'message' => 'A valid order ID is required.',
+                    'data'    => null
+                ]));
+        }
+
+        $valid_categories = [
+            'Payment issue',
+            'Order issue',
+            'Missing item',
+            'Wrong item',
+            'Delivery issue',
+            'Return/Refund issue',
+            'Other'
+        ];
+
+        if (empty($category) || !in_array($category, $valid_categories, true)) {
+            return $this->output
+                ->set_status_header(422)
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 422,
+                    'message' => 'Please select a valid issue category.',
+                    'data'    => null
+                ]));
+        }
+
+        if (empty($description)) {
+            return $this->output
+                ->set_status_header(422)
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 422,
+                    'message' => 'Please provide a description of the issue.',
+                    'data'    => null
+                ]));
+        }
+
+        if (mb_strlen($description) < 10) {
+            return $this->output
+                ->set_status_header(422)
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 422,
+                    'message' => 'Please provide a more detailed description (at least 10 characters).',
+                    'data'    => null
+                ]));
+        }
+
+        // Verify order exists and belongs to this user
+        $order = $this->db->get_where('orders', [
+            'id'      => $order_id,
+            'user_id' => $user_id
+        ])->row();
+
+        if (!$order) {
+            return $this->output
+                ->set_status_header(404)
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 404,
+                    'message' => 'Order not found or does not belong to your account.',
+                    'data'    => null
+                ]));
+        }
+
+        // Generate human-readable unique reference number: SR-YYYYMMDD-XXXXXX
+        do {
+            $random_suffix = strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+            $ticket_number = 'SR-' . date('Ymd') . '-' . $random_suffix;
+            $exists = $this->db->where('ticket_number', $ticket_number)->count_all_results('support_requests');
+        } while ($exists > 0);
+
+        $now = date('Y-m-d H:i:s');
+        $this->db->insert('support_requests', [
+            'ticket_number' => $ticket_number,
+            'order_id'      => $order_id,
+            'customer_id'   => $user_id,
+            'category'      => $category,
+            'description'   => $description,
+            'status'        => 'Open',
+            'created_at'    => $now,
+            'updated_at'    => $now,
+        ]);
+
+        $request_id = $this->db->insert_id();
+
+        // Notify and record in order status timeline
+        $this->insert_status_history(
+            $order_id,
+            $order->status,
+            "Customer opened support ticket #{$ticket_number} [{$category}]",
+            'customer'
+        );
+
+        log_message('info', "Support request {$ticket_number} created for Order #{$order->order_number} (ID: {$order_id}) by user #{$user_id}.");
+
+        return $this->output
+            ->set_status_header(201)
+            ->set_output(json_encode([
+                'status'  => true,
+                'code'    => 201,
+                'message' => 'Support request submitted successfully. Our support team has been notified.',
+                'data'    => [
+                    'id'             => (int)$request_id,
+                    'ticket_number'  => $ticket_number,
+                    'order_id'       => (int)$order_id,
+                    'order_number'   => $order->order_number,
+                    'category'       => $category,
+                    'description'    => $description,
+                    'status'         => 'Open',
+                    'admin_response' => null,
+                    'resolved_at'    => null,
+                    'created_at'     => $now,
+                ]
+            ]));
+    }
+
+    /**
+     * Get all support requests for a specific order
+     */
+    public function get_order_support_requests($order_id = null)
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->authenticate();
+        $this->ensure_support_requests_table();
+        $this->ensure_orders_table();
+
+        $order_id = intval($order_id ?: $this->input->get('order_id', true));
+
+        if ($order_id <= 0) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 400,
+                    'message' => 'A valid order ID is required.',
+                    'data'    => null
+                ]));
+        }
+
+        $order = $this->db->get_where('orders', [
+            'id'      => $order_id,
+            'user_id' => $user_id
+        ])->row();
+
+        if (!$order) {
+            return $this->output
+                ->set_status_header(404)
+                ->set_output(json_encode([
+                    'status'  => false,
+                    'code'    => 404,
+                    'message' => 'Order not found or does not belong to your account.',
+                    'data'    => null
+                ]));
+        }
+
+        $rows = $this->db
+            ->where('order_id', $order_id)
+            ->where('customer_id', $user_id)
+            ->order_by('id', 'DESC')
+            ->get('support_requests')
+            ->result_array();
+
+        $requests = array_map(function ($r) {
+            return [
+                'id'             => (int)$r['id'],
+                'ticket_number'  => $r['ticket_number'],
+                'order_id'       => (int)$r['order_id'],
+                'category'       => $r['category'],
+                'description'    => $r['description'],
+                'status'         => $r['status'],
+                'admin_response' => $r['admin_response'],
+                'resolved_at'    => $r['resolved_at'],
+                'created_at'     => $r['created_at'],
+                'updated_at'     => $r['updated_at'],
+            ];
+        }, $rows);
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status'  => true,
+                'code'    => 200,
+                'message' => 'Support requests retrieved successfully.',
+                'data'    => [
+                    'order_id'     => (int)$order_id,
+                    'order_number' => $order->order_number,
+                    'total_count'  => count($requests),
+                    'requests'     => $requests,
                 ]
             ]));
     }
@@ -2782,7 +4119,8 @@ class Api extends CI_Controller
         $discovery = $this->get_nearby_grouped_products($cust_lat, $cust_lon, [
             'search' => $search,
             'category_id' => $category_id,
-            'limit' => 20
+            'limit' => 20,
+            'in_stock_only' => true
         ]);
 
         if (!empty($discovery['error'])) {
@@ -2796,6 +4134,8 @@ class Api extends CI_Controller
                 ]));
         }
 
+        $nearby_stores = $this->get_nearby_stores_data($cust_lat, $cust_lon, 12);
+
         return $this->output
             ->set_status_header(200)
             ->set_output(json_encode([
@@ -2804,6 +4144,7 @@ class Api extends CI_Controller
                 'message' => 'Home data fetched successfully',
                 'data' => [
                     'categories'           => $categories,
+                    'stores'               => $nearby_stores,
                     'products'             => $discovery['products'],
                     'delivery_radius_km'   => $discovery['delivery_radius_km'],
                     'nearby_vendors_count' => (int)($discovery['nearby_vendors_count'] ?? 0),
@@ -2820,15 +4161,48 @@ class Api extends CI_Controller
         $this->ensureMethod('GET');
         $this->output->set_content_type('application/json');
 
-        $categories = $this->db
-            ->where('is_active', 1)
-            ->order_by('id', 'ASC')
-            ->get('categories')
-            ->result();
+        $search = trim($this->input->get('search', true) ?? $this->input->get('q', true) ?? '');
 
+        $this->db->where('is_active', 1);
+        if ($search !== '') {
+            $this->db->group_start();
+            $this->db->like('name', $search);
+            $this->db->or_like('description', $search);
+            $this->db->group_end();
+        }
+        $categories = $this->db->order_by('id', 'ASC')->get('categories')->result();
+
+        // Calculate product counts for each category
         foreach ($categories as $cat) {
             $cat->image_url = !empty($cat->image) ? base_url($cat->image) : null;
+
+            // Count in vendor_products
+            $vp_count = (int)$this->db->where('category_id', (int)$cat->id)
+                                      ->where('is_active', 1)
+                                      ->count_all_results('vendor_products');
+
+            // Count in master products
+            $p_count = (int)$this->db->where('category_id', (int)$cat->id)
+                                     ->where('is_active', 1)
+                                     ->count_all_results('products');
+
+            $count = max($vp_count, $p_count);
+            $cat->product_count = $count;
+            $cat->has_products = ($count > 0);
         }
+
+        // Sort: categories with products FIRST, categories without products LAST
+        usort($categories, function ($a, $b) {
+            $a_has = $a->has_products ? 1 : 0;
+            $b_has = $b->has_products ? 1 : 0;
+            if ($a_has !== $b_has) {
+                return $b_has - $a_has; // 1 before 0 (has products first)
+            }
+            if ($a->product_count !== $b->product_count) {
+                return ($a->product_count > $b->product_count) ? -1 : 1;
+            }
+            return (int)$a->id - (int)$b->id;
+        });
 
         return $this->output
             ->set_status_header(200)
@@ -2959,6 +4333,375 @@ class Api extends CI_Controller
     }
 
     /**
+     * Get list of nearby stores (factual info only: image, name, category, status, distance, view store action)
+     */
+    public function get_nearby_stores()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $this->resolve_customer_location($cust_lat, $cust_lon);
+        $limit = max(1, min(100, (int)($this->input->get('limit', true) ?? 20)));
+
+        $stores = $this->get_nearby_stores_data($cust_lat, $cust_lon, $limit);
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Nearby stores fetched successfully',
+                'data' => [
+                    'stores' => $stores,
+                    'total' => count($stores),
+                ]
+            ]));
+    }
+
+    /**
+     * Get dedicated store details by vendor ID
+     */
+    public function get_store_detail($vendor_id = null)
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        if ($vendor_id === null) {
+            $vendor_id = $this->input->get('vendor_id', true) ?? $this->input->get('id', true);
+        }
+        $vendor_id = (int)$vendor_id;
+
+        if ($vendor_id <= 0) {
+            return $this->output
+                ->set_status_header(422)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 422,
+                    'message' => 'Store / Vendor ID is required',
+                    'data' => null
+                ]));
+        }
+
+        $v = $this->db
+            ->select('id, name, store_name, owner_name, address, pincode, latitude, longitude, opening_time, closing_time, is_holiday, store_status, store_photo, profile_image, contact_number, is_active')
+            ->where('id', $vendor_id)
+            ->where('role', 'vendor')
+            ->get('users')
+            ->row();
+
+        if (!$v || (int)$v->is_active !== 1) {
+            return $this->output
+                ->set_status_header(404)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 404,
+                    'message' => 'Store not found or inactive',
+                    'data' => null
+                ]));
+        }
+
+        $this->resolve_customer_location($cust_lat, $cust_lon);
+        $this->load->helper('distance');
+        $dist = ($cust_lat !== null && $cust_lon !== null && is_numeric($v->latitude) && is_numeric($v->longitude))
+            ? calculate_distance_km($cust_lat, $cust_lon, $v->latitude, $v->longitude)
+            : null;
+
+        // Factual Open/Closed status
+        $now_time = date('H:i:s');
+        $is_open = true;
+        $status_reason = 'Operating normally';
+        if (isset($v->store_status) && strtolower((string)$v->store_status) === 'closed') {
+            $is_open = false;
+            $status_reason = 'Store is currently closed';
+        } elseif (isset($v->is_holiday) && (int)$v->is_holiday === 1) {
+            $is_open = false;
+            $status_reason = 'On holiday';
+        } elseif (!empty($v->opening_time) && !empty($v->closing_time) && $v->opening_time !== '00:00:00' && $v->closing_time !== '00:00:00') {
+            $open_t = $v->opening_time;
+            $close_t = $v->closing_time;
+            if ($open_t <= $close_t) {
+                $is_open = ($now_time >= $open_t && $now_time <= $close_t);
+            } else {
+                $is_open = ($now_time >= $open_t || $now_time <= $close_t);
+            }
+            if (!$is_open) {
+                $status_reason = 'Outside operating hours';
+            }
+        }
+
+        $operating_hours = 'Hours not specified';
+        if (!empty($v->opening_time) && !empty($v->closing_time)) {
+            $formatted_open = date('h:i A', strtotime($v->opening_time));
+            $formatted_close = date('h:i A', strtotime($v->closing_time));
+            $operating_hours = "{$formatted_open} - {$formatted_close}";
+        }
+
+        // Store categories (only categories that have active products in this store)
+        $categories = $this->db
+            ->select('c.id, c.name, c.slug, c.image, COUNT(vp.id) as product_count')
+            ->from('vendor_products vp')
+            ->join('categories c', 'c.id = vp.category_id')
+            ->where('vp.vendor_id', $vendor_id)
+            ->where('vp.is_active', 1)
+            ->where('vp.stock >', 0)
+            ->group_by('c.id')
+            ->order_by('product_count', 'DESC')
+            ->get()
+            ->result();
+
+        foreach ($categories as $cat) {
+            $cat->image_url = !empty($cat->image) ? base_url($cat->image) : null;
+        }
+
+        $category_names = array_map(function($c) { return $c->name; }, $categories);
+        $category_summary = !empty($category_names) ? implode(', ', array_slice($category_names, 0, 3)) : 'General Grocery';
+
+        $total_products = $this->db
+            ->where('vendor_id', $vendor_id)
+            ->where('is_active', 1)
+            ->where('stock >', 0)
+            ->count_all_results('vendor_products');
+
+        $store_data = [
+            'id'               => (int)$v->id,
+            'name'             => $v->name,
+            'store_name'       => !empty($v->store_name) ? $v->store_name : $v->name,
+            'owner_name'       => $v->owner_name,
+            'store_photo'      => $v->store_photo,
+            'store_photo_url'  => !empty($v->store_photo) ? base_url($v->store_photo) : null,
+            'address'          => $v->address,
+            'pincode'          => $v->pincode,
+            'contact_number'   => $v->contact_number,
+            'latitude'         => (float)$v->latitude,
+            'longitude'        => (float)$v->longitude,
+            'distance_km'      => $dist !== null ? (float)$dist : null,
+            'distance_text'    => $dist !== null ? ($dist < 1 ? round($dist * 1000) . ' m' : round($dist, 1) . ' km') : null,
+            'store_status'     => $v->store_status ?? 'open',
+            'is_holiday'       => (int)($v->is_holiday ?? 0),
+            'opening_time'     => $v->opening_time,
+            'closing_time'     => $v->closing_time,
+            'operating_hours'  => $operating_hours,
+            'is_open'          => $is_open,
+            'status_label'     => $is_open ? 'Open' : 'Closed',
+            'status_reason'    => $status_reason,
+            'category_summary' => $category_summary,
+            'total_products'   => (int)$total_products,
+            'categories'       => $categories,
+        ];
+
+        // Check if customer saved this store
+        $is_saved = false;
+        $optional_user_id = $this->get_optional_user_id();
+        if ($optional_user_id) {
+            $this->ensure_saved_stores_and_lists_tables();
+            $check_s = $this->db->get_where('saved_stores', [
+                'customer_id' => $optional_user_id,
+                'store_id'    => $vendor_id
+            ])->row();
+            $is_saved = ($check_s !== null);
+        }
+        $store_data['is_saved'] = $is_saved;
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Store details fetched successfully',
+                'data' => $store_data
+            ]));
+    }
+
+    /**
+     * Get products strictly scoped to a specific store/vendor.
+     * Supports category filtering and in-store search.
+     */
+    public function get_store_products($vendor_id = null)
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        if ($vendor_id === null) {
+            $vendor_id = $this->input->get('vendor_id', true) ?? $this->input->get('id', true);
+        }
+        $vendor_id = (int)$vendor_id;
+
+        if ($vendor_id <= 0) {
+            return $this->output
+                ->set_status_header(422)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 422,
+                    'message' => 'Store / Vendor ID is required',
+                    'data' => null
+                ]));
+        }
+
+        $category_id = $this->input->get('category_id', true);
+        $search = trim($this->input->get('search', true) ?? $this->input->get('q', true) ?? '');
+        $sort_by = trim($this->input->get('sort_by', true) ?? 'newest');
+        $page = max(1, (int)($this->input->get('page', true) ?? 1));
+        $limit = max(1, min(100, (int)($this->input->get('limit', true) ?? 20)));
+
+        $this->get_vendor_products_query();
+        $this->db->where('vp.vendor_id', $vendor_id);
+        $this->db->where('vp.is_active', 1);
+
+        if (!empty($category_id)) {
+            $this->db->where('vp.category_id', (int)$category_id);
+        }
+
+        if ($search !== '') {
+            $words = array_filter(explode(' ', $search));
+            foreach ($words as $w) {
+                $w = trim($w);
+                if ($w !== '') {
+                    $this->db->group_start();
+                    $this->db->like('vp.product_name', $w);
+                    $this->db->or_like('vp.brand', $w);
+                    $this->db->or_like('vp.description', $w);
+                    $this->db->or_like('c.name', $w);
+                    $this->db->group_end();
+                }
+            }
+        }
+
+        // Apply sorting
+        switch ($sort_by) {
+            case 'price_asc':
+            case 'price_low_to_high':
+                $this->db->order_by('vp.selling_price', 'ASC');
+                break;
+            case 'price_desc':
+            case 'price_high_to_low':
+                $this->db->order_by('vp.selling_price', 'DESC');
+                break;
+            case 'name_asc':
+                $this->db->order_by('vp.product_name', 'ASC');
+                break;
+            case 'name_desc':
+                $this->db->order_by('vp.product_name', 'DESC');
+                break;
+            case 'newest':
+            default:
+                $this->db->order_by('vp.id', 'DESC');
+                break;
+        }
+
+        $all_store_rows = $this->db->get()->result();
+
+        $grouped_store = [];
+        foreach ($all_store_rows as $row) {
+            $row->price = (float)$row->price;
+            $row->sale_price = (float)$row->sale_price;
+            $row->stock = (int)$row->stock;
+            $row->image_url = !empty($row->image) ? base_url($row->image) : null;
+            $row->store_photo_url = !empty($row->store_photo) ? base_url($row->store_photo) : null;
+            $row->gallery_urls = [];
+
+            if (!empty($row->product_id)) {
+                $gk = 'p_' . $row->product_id;
+            } else {
+                $gk = 'n_' . strtolower(trim(preg_replace('/[^a-zA-Z0-9]/', '', $row->name)));
+            }
+            $grouped_store[$gk][] = $row;
+        }
+
+        $this->load->helper('distance');
+        $threshold = get_low_stock_threshold();
+
+        $products = [];
+        foreach ($grouped_store as $gk => $items) {
+            // Sort variants inside group: lowest sale_price first
+            usort($items, function ($a, $b) {
+                if ($a->sale_price == $b->sale_price) return 0;
+                return ($a->sale_price < $b->sale_price) ? -1 : 1;
+            });
+
+            $lead = $items[0];
+            $lead_variants = [];
+            foreach ($items as $it) {
+                $var_temp_unavail = (int)($it->temporarily_unavailable ?? 0);
+                $var_stock = (int)$it->stock;
+                $lead_variants[] = [
+                    'id'                      => (int)$it->id,
+                    'vendor_product_id'       => (int)$it->id,
+                    'product_id'              => (int)$it->product_id,
+                    'variant_id'              => !empty($it->variant_id) ? (int)$it->variant_id : null,
+                    'variant_name'            => !empty($it->unit) ? $it->unit : $it->name,
+                    'unit'                    => $it->unit ?? '',
+                    'price'                   => (float)$it->price,
+                    'sale_price'              => (float)$it->sale_price,
+                    'stock'                   => $var_stock,
+                    'temporarily_unavailable' => $var_temp_unavail,
+                    'low_stock_threshold'     => $threshold,
+                    'stock_state'             => classify_stock_state($var_stock, $var_temp_unavail, $threshold),
+                ];
+            }
+            $lead->temporarily_unavailable = (int)($lead->temporarily_unavailable ?? 0);
+            $lead->low_stock_threshold = $threshold;
+            $lead->stock_state = classify_stock_state((int)$lead->stock, $lead->temporarily_unavailable, $threshold);
+            $lead->variants = $lead_variants;
+            $lead->variant_count = count($lead_variants);
+            $lead->has_variants = count($lead_variants) > 1;
+            $products[] = $lead;
+        }
+
+        // Apply sort_by on grouped products
+        switch ($sort_by) {
+            case 'price_asc':
+            case 'price_low_to_high':
+                usort($products, function ($a, $b) {
+                    return ($a->sale_price < $b->sale_price) ? -1 : 1;
+                });
+                break;
+            case 'price_desc':
+            case 'price_high_to_low':
+                usort($products, function ($a, $b) {
+                    return ($a->sale_price > $b->sale_price) ? -1 : 1;
+                });
+                break;
+            case 'name_asc':
+                usort($products, function ($a, $b) {
+                    return strcasecmp($a->name, $b->name);
+                });
+                break;
+            case 'name_desc':
+                usort($products, function ($a, $b) {
+                    return strcasecmp($b->name, $a->name);
+                });
+                break;
+            case 'newest':
+            default:
+                usort($products, function ($a, $b) {
+                    return ($a->id > $b->id) ? -1 : 1;
+                });
+                break;
+        }
+
+        $total_records = count($products);
+        $offset = ($page - 1) * $limit;
+        $paginated_products = array_slice($products, $offset, $limit);
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Store products fetched successfully',
+                'data' => [
+                    'products' => $paginated_products,
+                    'pagination' => [
+                        'total_records' => (int)$total_records,
+                        'current_page'  => $page,
+                        'limit'         => $limit,
+                        'total_pages'   => (int)ceil($total_records / $limit),
+                    ]
+                ]
+            ]));
+    }
+
+    /**
      * Get list of all active products with nearby discovery & ranking
      */
     public function get_product_list()
@@ -3067,70 +4810,331 @@ class Api extends CI_Controller
         $product->store_photo_url = !empty($product->store_photo) ? base_url($product->store_photo) : null;
         $product->gallery_urls = [];
 
-        // Check customer location for distance & nearby alternatives
+        // Check customer location for distance & nearby alternatives/offers
         $this->load->helper('distance');
         $delivery_radius_km = get_delivery_radius_km();
+        $threshold = get_low_stock_threshold();
         $product->delivery_radius_km = $delivery_radius_km;
+        $product->low_stock_threshold = $threshold;
+        $product->temporarily_unavailable = (int)($product->temporarily_unavailable ?? 0);
+        $product->stock_state = classify_stock_state((int)$product->stock, $product->temporarily_unavailable, $threshold);
         $product->distance_km = null;
         $product->in_delivery_radius = true;
         $product->alternatives = [];
+        $product->offers = [];
 
-        if ($this->resolve_customer_location($cust_lat, $cust_lon)) {
-            if ($product->vendor_latitude !== null && $product->vendor_longitude !== null) {
-                $dist = calculate_distance_km($cust_lat, $cust_lon, $product->vendor_latitude, $product->vendor_longitude);
-                $product->distance_km = $dist;
-                $product->in_delivery_radius = ($dist <= $delivery_radius_km);
-            }
-
-            // Find alternative vendors selling the same variant/product
-            $this->get_vendor_products_query();
-            $this->db->where('vp.is_active', 1);
-            $this->db->where('vp.stock >', 0);
-            $this->db->where('vp.id !=', $product->id);
-            $this->db->where('u.latitude IS NOT NULL', null, false);
-            $this->db->where('u.longitude IS NOT NULL', null, false);
-            $this->db->where('u.role', 'vendor');
-
-            if (!empty($product->variant_id)) {
-                $this->db->where('vp.variant_id', $product->variant_id);
-            } elseif (!empty($product->product_id)) {
-                $this->db->where('vp.product_id', $product->product_id);
-            } else {
-                $this->db->where('LOWER(TRIM(vp.product_name))', strtolower(trim($product->name)));
-            }
-
-            $alt_rows = $this->db->get()->result();
-            $qualifying_alts = [];
-            foreach ($alt_rows as $alt) {
-                $alt_dist = calculate_distance_km($cust_lat, $cust_lon, $alt->vendor_latitude, $alt->vendor_longitude);
-                if ($alt_dist <= $delivery_radius_km) {
-                    $qualifying_alts[] = [
-                        'vendor_product_id' => (int)$alt->id,
-                        'vendor_id'         => (int)$alt->vendor_id,
-                        'vendor_name'       => $alt->vendor_name,
-                        'store_name'        => $alt->store_name,
-                        'store_address'     => $alt->store_address,
-                        'price'             => (float)$alt->price,
-                        'sale_price'        => (float)$alt->sale_price,
-                        'stock'             => (int)$alt->stock,
-                        'distance_km'       => (float)$alt_dist,
-                    ];
-                }
-            }
-
-            // Rank alternatives: price ASC, distance ASC, stock DESC
-            usort($qualifying_alts, function ($a, $b) {
-                if (abs($a['sale_price'] - $b['sale_price']) > 0.001) {
-                    return ($a['sale_price'] < $b['sale_price']) ? -1 : 1;
-                }
-                if (abs($a['distance_km'] - $b['distance_km']) > 0.01) {
-                    return ($a['distance_km'] < $b['distance_km']) ? -1 : 1;
-                }
-                return ($a['stock'] > $b['stock']) ? -1 : 1;
-            });
-
-            $product->alternatives = $qualifying_alts;
+        $has_cust_loc = $this->resolve_customer_location($cust_lat, $cust_lon);
+        if ($has_cust_loc && $product->vendor_latitude !== null && $product->vendor_longitude !== null) {
+            $dist = calculate_distance_km($cust_lat, $cust_lon, $product->vendor_latitude, $product->vendor_longitude);
+            $product->distance_km = $dist;
+            $product->in_delivery_radius = ($dist <= $delivery_radius_km);
         }
+
+        // Query all active vendor listings selling the same master product (product_id or matching name)
+        $this->get_vendor_products_query();
+        $this->db->where('vp.is_active', 1);
+        $this->db->where('u.role', 'vendor');
+
+        if (!empty($product->product_id)) {
+            $this->db->where('vp.product_id', $product->product_id);
+        } else {
+            $this->db->where('LOWER(TRIM(vp.product_name))', strtolower(trim($product->name)));
+        }
+
+        $all_rows = $this->db->get()->result();
+
+        // 1. Gather all variants for the CURRENT vendor
+        $variants = [];
+        foreach ($all_rows as $row) {
+            if ((int)$row->vendor_id === (int)$product->vendor_id) {
+                $var_temp = (int)($row->temporarily_unavailable ?? 0);
+                $var_stock = (int)($row->stock ?? 0);
+                $variants[] = [
+                    'id'                      => (int)$row->id,
+                    'vendor_product_id'       => (int)$row->id,
+                    'product_id'              => (int)$row->product_id,
+                    'variant_id'              => !empty($row->variant_id) ? (int)$row->variant_id : null,
+                    'variant_name'            => !empty($row->unit) ? $row->unit : (!empty($row->name) ? $row->name : 'Standard'),
+                    'unit'                    => $row->unit ?? '',
+                    'price'                   => (float)($row->price ?? 0),
+                    'sale_price'              => (float)($row->sale_price ?? $row->price),
+                    'stock'                   => $var_stock,
+                    'sku'                     => $row->sku ?? null,
+                    'image_url'               => !empty($row->image) ? base_url($row->image) : $product->image_url,
+                    'temporarily_unavailable' => $var_temp,
+                    'low_stock_threshold'     => $threshold,
+                    'stock_state'             => classify_stock_state($var_stock, $var_temp, $threshold),
+                    'is_available'            => ($var_stock > 0 && ($row->store_status ?? 'open') !== 'closed' && empty($var_temp)),
+                    'is_current'              => ((int)$row->id === (int)$product->id),
+                ];
+            }
+        }
+        // Ensure current product is in $variants if not present
+        $has_curr_var = false;
+        foreach ($variants as $v) {
+            if ($v['id'] === (int)$product->id) {
+                $has_curr_var = true;
+                break;
+            }
+        }
+        if (!$has_curr_var) {
+            $variants[] = [
+                'id'                      => (int)$product->id,
+                'vendor_product_id'       => (int)$product->id,
+                'product_id'              => (int)$product->product_id,
+                'variant_id'              => !empty($product->variant_id) ? (int)$product->variant_id : null,
+                'variant_name'            => !empty($product->unit) ? $product->unit : (!empty($product->name) ? $product->name : 'Standard'),
+                'unit'                    => $product->unit ?? '',
+                'price'                   => (float)($product->price ?? 0),
+                'sale_price'              => (float)($product->sale_price ?? $product->price),
+                'stock'                   => (int)($product->stock ?? 0),
+                'sku'                     => $product->sku ?? null,
+                'image_url'               => $product->image_url,
+                'temporarily_unavailable' => $product->temporarily_unavailable,
+                'low_stock_threshold'     => $threshold,
+                'stock_state'             => $product->stock_state,
+                'is_available'            => ((int)($product->stock ?? 0) > 0 && ($product->store_status ?? 'open') !== 'closed' && empty($product->temporarily_unavailable)),
+                'is_current'              => true,
+            ];
+        }
+        usort($variants, function ($a, $b) {
+            return ($a['sale_price'] < $b['sale_price']) ? -1 : 1;
+        });
+        $product->variants = $variants;
+        $product->has_variants = count($variants) > 1;
+        $product->variant_count = count($variants);
+
+        $qualifying_offers = [];
+        $qualifying_alts = [];
+
+        foreach ($all_rows as $row) {
+            $row_dist = null;
+            if ($has_cust_loc && $row->vendor_latitude !== null && $row->vendor_longitude !== null) {
+                $row_dist = calculate_distance_km($cust_lat, $cust_lon, $row->vendor_latitude, $row->vendor_longitude);
+                if ($row_dist > $delivery_radius_km) {
+                    continue; // Skip stores outside delivery radius
+                }
+            }
+
+            $mrp = (float)($row->price ?? 0);
+            $sale_price = (float)($row->sale_price ?? $mrp);
+            $stock = (int)($row->stock ?? 0);
+            $store_status = $row->store_status ?? 'open';
+            $is_holiday = (int)($row->is_holiday ?? 0);
+            $is_open = ($store_status !== 'closed' && $is_holiday === 0);
+            $row_temp_unavail = (int)($row->temporarily_unavailable ?? 0);
+            $offer_stock_state = classify_stock_state($stock, $row_temp_unavail, $threshold);
+            $is_available = ($stock > 0 && $is_open && empty($row_temp_unavail));
+
+            if (!empty($row_temp_unavail)) {
+                $availability = 'Temporarily Unavailable';
+                $fulfilment_option = 'Unavailable';
+            } elseif ($stock <= 0) {
+                $availability = 'Out of Stock';
+                $fulfilment_option = 'Unavailable';
+            } elseif (!$is_open) {
+                $availability = 'Store Closed';
+                $open_time_str = !empty($row->store_opening_time) ? date('h:i A', strtotime($row->store_opening_time)) : '';
+                $fulfilment_option = $open_time_str ? "Opens at {$open_time_str}" : "Store Closed";
+            } else {
+                $availability = ($stock < $threshold) ? 'Low Stock' : 'In Stock';
+                $prep = isset($row->prep_time_minutes) && is_numeric($row->prep_time_minutes) && (int)$row->prep_time_minutes > 0 ? (int)$row->prep_time_minutes : 30;
+                $travel = ($row_dist !== null) ? max(10, (int)ceil(($row_dist / 25.0) * 60.0)) : 15;
+                $est_time = $prep + $travel;
+                $fulfilment_option = "Standard Delivery (~{$est_time} mins)";
+            }
+
+            $discount_percent = 0;
+            if ($mrp > 0 && $sale_price < $mrp) {
+                $discount_percent = (int)round((($mrp - $sale_price) / $mrp) * 100);
+            }
+
+            $offer_item = [
+                'vendor_product_id'       => (int)$row->id,
+                'vendor_id'               => (int)$row->vendor_id,
+                'vendor_name'             => $row->vendor_name ?? '',
+                'store_name'              => !empty($row->store_name) ? $row->store_name : ($row->vendor_name ?? 'Store'),
+                'store_photo_url'         => !empty($row->store_photo) ? base_url($row->store_photo) : null,
+                'store_address'           => $row->store_address ?? '',
+                'store_contact'           => $row->store_contact ?? '',
+                'store_opening_time'      => $row->store_opening_time ?? null,
+                'store_closing_time'      => $row->store_closing_time ?? null,
+                'store_status'            => $store_status,
+                'is_holiday'              => $is_holiday,
+                'price'                   => $mrp,
+                'sale_price'              => $sale_price,
+                'discount_percent'        => $discount_percent,
+                'stock'                   => $stock,
+                'temporarily_unavailable' => $row_temp_unavail,
+                'low_stock_threshold'     => $threshold,
+                'stock_state'             => $offer_stock_state,
+                'is_available'            => $is_available,
+                'availability'            => $availability,
+                'distance_km'             => $row_dist !== null ? (float)$row_dist : null,
+                'distance_text'           => $row_dist !== null ? "{$row_dist} km away" : '',
+                'fulfilment_option'       => $fulfilment_option,
+                'is_current'              => ((int)$row->id === (int)$product->id),
+                'ranking_badge'           => null,
+            ];
+
+            $qualifying_offers[] = $offer_item;
+
+            // Backward compatible alternatives (other vendors with stock > 0)
+            if ((int)$row->id !== (int)$product->id && $stock > 0) {
+                $qualifying_alts[] = [
+                    'vendor_product_id'       => (int)$row->id,
+                    'vendor_id'               => (int)$row->vendor_id,
+                    'vendor_name'             => $row->vendor_name ?? '',
+                    'store_name'              => !empty($row->store_name) ? $row->store_name : ($row->vendor_name ?? 'Store'),
+                    'store_address'           => $row->store_address ?? '',
+                    'price'                   => $mrp,
+                    'sale_price'              => $sale_price,
+                    'stock'                   => $stock,
+                    'temporarily_unavailable' => $row_temp_unavail,
+                    'low_stock_threshold'     => $threshold,
+                    'stock_state'             => $offer_stock_state,
+                    'distance_km'             => $row_dist !== null ? (float)$row_dist : 0.0,
+                ];
+            }
+        }
+
+        // Ensure current product is present in offers list if not already
+        $has_current = false;
+        foreach ($qualifying_offers as $o) {
+            if ($o['vendor_product_id'] === (int)$product->id) {
+                $has_current = true;
+                break;
+            }
+        }
+        if (!$has_current) {
+            $mrp = (float)($product->price ?? 0);
+            $sale_price = (float)($product->sale_price ?? $mrp);
+            $stock = (int)($product->stock ?? 0);
+            $store_status = $product->store_status ?? 'open';
+            $is_holiday = (int)($product->is_holiday ?? 0);
+            $is_open = ($store_status !== 'closed' && $is_holiday === 0);
+            $prod_temp_unavail = (int)($product->temporarily_unavailable ?? 0);
+            $prod_stock_state = classify_stock_state($stock, $prod_temp_unavail, $threshold);
+            $is_available = ($stock > 0 && $is_open && empty($prod_temp_unavail));
+
+            if (!empty($prod_temp_unavail)) {
+                $availability = 'Temporarily Unavailable';
+                $fulfilment_option = 'Unavailable';
+            } elseif ($stock <= 0) {
+                $availability = 'Out of Stock';
+                $fulfilment_option = 'Unavailable';
+            } elseif (!$is_open) {
+                $availability = 'Store Closed';
+                $open_time_str = !empty($product->store_opening_time) ? date('h:i A', strtotime($product->store_opening_time)) : '';
+                $fulfilment_option = $open_time_str ? "Opens at {$open_time_str}" : "Store Closed";
+            } else {
+                $availability = ($stock < $threshold) ? 'Low Stock' : 'In Stock';
+                $prep = isset($product->prep_time_minutes) && is_numeric($product->prep_time_minutes) && (int)$product->prep_time_minutes > 0 ? (int)$product->prep_time_minutes : 30;
+                $travel = ($product->distance_km !== null) ? max(10, (int)ceil(($product->distance_km / 25.0) * 60.0)) : 15;
+                $fulfilment_option = "Standard Delivery (~" . ($prep + $travel) . " mins)";
+            }
+
+            $discount_percent = 0;
+            if ($mrp > 0 && $sale_price < $mrp) {
+                $discount_percent = (int)round((($mrp - $sale_price) / $mrp) * 100);
+            }
+
+            array_unshift($qualifying_offers, [
+                'vendor_product_id'       => (int)$product->id,
+                'vendor_id'               => (int)$product->vendor_id,
+                'vendor_name'             => $product->vendor_name ?? '',
+                'store_name'              => !empty($product->store_name) ? $product->store_name : ($product->vendor_name ?? 'Store'),
+                'store_photo_url'         => $product->store_photo_url,
+                'store_address'           => $product->store_address ?? '',
+                'store_contact'           => $product->store_contact ?? '',
+                'store_opening_time'      => $product->store_opening_time ?? null,
+                'store_closing_time'      => $product->store_closing_time ?? null,
+                'store_status'            => $store_status,
+                'is_holiday'              => $is_holiday,
+                'price'                   => $mrp,
+                'sale_price'              => $sale_price,
+                'discount_percent'        => $discount_percent,
+                'stock'                   => $stock,
+                'temporarily_unavailable' => $prod_temp_unavail,
+                'low_stock_threshold'     => $threshold,
+                'stock_state'             => $prod_stock_state,
+                'is_available'            => $is_available,
+                'availability'            => $availability,
+                'distance_km'             => $product->distance_km,
+                'distance_text'           => $product->distance_km !== null ? "{$product->distance_km} km away" : '',
+                'fulfilment_option'       => $fulfilment_option,
+                'is_current'              => true,
+                'ranking_badge'           => null,
+            ]);
+        }
+        // Deduplicate offers by vendor_id for store comparison (keep lowest price offer or current offer per vendor)
+        $store_offers = [];
+        foreach ($qualifying_offers as $o) {
+            $vid = (int)$o['vendor_id'];
+            if (!isset($store_offers[$vid])) {
+                $store_offers[$vid] = $o;
+            } else {
+                if ($o['is_current'] || $o['sale_price'] < $store_offers[$vid]['sale_price']) {
+                    $store_offers[$vid] = $o;
+                }
+            }
+        }
+        $qualifying_offers = array_values($store_offers);
+
+        // Rank offers: in-stock first, lowest price first, shortest distance; out-of-stock at bottom
+        usort($qualifying_offers, function ($a, $b) {
+            if ($a['is_available'] !== $b['is_available']) {
+                return $a['is_available'] ? -1 : 1;
+            }
+            if (($a['stock'] > 0) !== ($b['stock'] > 0)) {
+                return ($a['stock'] > 0) ? -1 : 1;
+            }
+            if (abs($a['sale_price'] - $b['sale_price']) > 0.001) {
+                return ($a['sale_price'] < $b['sale_price']) ? -1 : 1;
+            }
+            $da = $a['distance_km'] ?? 9999;
+            $db = $b['distance_km'] ?? 9999;
+            if (abs($da - $db) > 0.01) {
+                return ($da < $db) ? -1 : 1;
+            }
+            return ($a['stock'] > $b['stock']) ? -1 : 1;
+        });
+
+        // Factual badge for strictly lowest price among available offers (when > 1 in-stock offer)
+        $in_stock_offers = array_values(array_filter($qualifying_offers, function ($o) {
+            return $o['stock'] > 0;
+        }));
+        if (count($in_stock_offers) > 1) {
+            $min_price = min(array_column($in_stock_offers, 'sale_price'));
+            $min_count = 0;
+            foreach ($in_stock_offers as $iso) {
+                if (abs($iso['sale_price'] - $min_price) < 0.01) {
+                    $min_count++;
+                }
+            }
+            if ($min_count === 1) {
+                foreach ($qualifying_offers as &$off) {
+                    if ($off['stock'] > 0 && abs($off['sale_price'] - $min_price) < 0.01) {
+                        $off['ranking_badge'] = 'Lowest Price';
+                    }
+                }
+                unset($off);
+            }
+        }
+
+        // Rank alternatives for backward compatibility
+        usort($qualifying_alts, function ($a, $b) {
+            if (abs($a['sale_price'] - $b['sale_price']) > 0.001) {
+                return ($a['sale_price'] < $b['sale_price']) ? -1 : 1;
+            }
+            if (abs($a['distance_km'] - $b['distance_km']) > 0.01) {
+                return ($a['distance_km'] < $b['distance_km']) ? -1 : 1;
+            }
+            return ($a['stock'] > $b['stock']) ? -1 : 1;
+        });
+
+        $product->offers = $qualifying_offers;
+        $product->alternatives = $qualifying_alts;
 
         return $this->output
             ->set_status_header(200)
@@ -3260,15 +5264,119 @@ class Api extends CI_Controller
         }
 
         $search = trim($this->input->get('search', true) ?? $this->input->get('q', true) ?? $this->input->get('query', true) ?? '');
+        $mode = strtolower(trim($this->input->get('mode', true) ?? 'products'));
         $category_param = $this->input->get('category_id', true);
         $brand_param = $this->input->get('brand', true);
+        $unit_param = $this->input->get('unit', true);
+        $availability = $this->input->get('availability', true) ?? ($this->input->get('in_stock', true) ? 'in_stock' : null);
+        $fulfilment = $this->input->get('fulfilment', true);
         $min_price = $this->input->get('min_price', true);
         $max_price = $this->input->get('max_price', true);
         $vendor_id = $this->input->get('vendor_id', true);
-        $sort_by = trim($this->input->get('sort_by', true) ?? 'relevance');
+        $sort_by = trim($this->input->get('sort_by', true) ?? ($mode === 'stores' ? 'distance_asc' : 'relevance'));
         $page = max(1, (int)($this->input->get('page', true) ?? 1));
-        $limit = max(1, min(100, (int)($this->input->get('limit', true) ?? 10)));
+        $limit = max(1, min(100, (int)($this->input->get('limit', true) ?? ($mode === 'stores' ? 12 : 10))));
 
+        // Mode: STORES (Store-first results)
+        if ($mode === 'stores') {
+            $all_stores = $this->get_nearby_stores_data($cust_lat, $cust_lon, 100);
+            $filtered_stores = [];
+            foreach ($all_stores as $s) {
+                if (!empty($search)) {
+                    $match = false;
+                    $q_lower = strtolower($search);
+                    if (strpos(strtolower($s['store_name']), $q_lower) !== false) $match = true;
+                    if (strpos(strtolower($s['name']), $q_lower) !== false) $match = true;
+                    if (strpos(strtolower($s['address'] ?? ''), $q_lower) !== false) $match = true;
+                    if (strpos(strtolower($s['category_summary'] ?? ''), $q_lower) !== false) $match = true;
+                    if (!$match) continue;
+                }
+
+                if (!empty($category_param)) {
+                    $cat_match = false;
+                    $cat_ids = is_array($category_param) ? array_map('intval', $category_param) : array_filter(array_map('intval', explode(',', $category_param)));
+                    if (!empty($cat_ids) && !empty($s['categories'])) {
+                        foreach ($s['categories'] as $scat) {
+                            if (in_array((int)$scat->id, $cat_ids)) {
+                                $cat_match = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!$cat_match && !empty($cat_ids)) continue;
+                }
+
+                if (!empty($availability) && ($availability === 'in_stock' || $availability === 'open')) {
+                    if (!$s['is_open']) continue;
+                }
+
+                $filtered_stores[] = $s;
+            }
+
+            // Sort stores
+            switch ($sort_by) {
+                case 'name_asc':
+                    usort($filtered_stores, function($a, $b) {
+                        return strcasecmp($a['store_name'], $b['store_name']);
+                    });
+                    break;
+                case 'name_desc':
+                    usort($filtered_stores, function($a, $b) {
+                        return strcasecmp($b['store_name'], $a['store_name']);
+                    });
+                    break;
+                case 'availability':
+                case 'open_first':
+                    usort($filtered_stores, function($a, $b) {
+                        if ($a['is_open'] !== $b['is_open']) {
+                            return $a['is_open'] ? -1 : 1;
+                        }
+                        return ($a['distance_km'] < $b['distance_km']) ? -1 : 1;
+                    });
+                    break;
+                case 'distance_asc':
+                default:
+                    usort($filtered_stores, function($a, $b) {
+                        if ($a['distance_km'] === null) return 1;
+                        if ($b['distance_km'] === null) return -1;
+                        return ($a['distance_km'] < $b['distance_km']) ? -1 : 1;
+                    });
+                    break;
+            }
+
+            $total_records = count($filtered_stores);
+            $offset = ($page - 1) * $limit;
+            $paginated_stores = array_slice($filtered_stores, $offset, $limit);
+            $total_pages = ceil($total_records / $limit);
+
+            $this->load->helper('distance');
+            $delivery_radius_km = get_delivery_radius_km();
+
+            return $this->output
+                ->set_status_header(200)
+                ->set_output(json_encode([
+                    'status' => true,
+                    'code' => 200,
+                    'message' => 'Stores searched successfully',
+                    'data' => [
+                        'mode' => 'stores',
+                        'stores' => $paginated_stores,
+                        'pagination' => [
+                            'total_records' => (int)$total_records,
+                            'current_page' => $page,
+                            'limit' => $limit,
+                            'total_pages' => (int)$total_pages
+                        ],
+                        'delivery_radius_km' => $delivery_radius_km,
+                        'nearby_stores_count' => count($all_stores),
+                        'no_nearby_vendors' => (count($all_stores) === 0)
+                    ],
+                    'nearby_vendors_count' => count($all_stores),
+                    'no_nearby_vendors' => (count($all_stores) === 0)
+                ]));
+        }
+
+        // Mode: PRODUCTS (Product-first results)
         // Parse category filter (supports comma-separated list or array)
         $category_ids = [];
         if (!empty($category_param)) {
@@ -3289,10 +5397,24 @@ class Api extends CI_Controller
             }
         }
 
+        // Parse unit filter (supports comma-separated list or array)
+        $units = [];
+        if (!empty($unit_param)) {
+            if (is_array($unit_param)) {
+                $units = array_map('trim', $unit_param);
+            } else {
+                $units = array_filter(array_map('trim', explode(',', $unit_param)));
+            }
+        }
+
         $discovery = $this->get_nearby_grouped_products($cust_lat, $cust_lon, [
             'search'       => $search,
             'category_ids' => $category_ids,
             'brands'       => $brands,
+            'units'        => $units,
+            'unit'         => !empty($units) ? null : $unit_param,
+            'availability' => $availability,
+            'fulfilment'   => $fulfilment,
             'min_price'    => $min_price,
             'max_price'    => $max_price,
             'vendor_id'    => $vendor_id,
@@ -3319,6 +5441,7 @@ class Api extends CI_Controller
                 'code' => 200,
                 'message' => 'Products searched successfully',
                 'data' => [
+                    'mode' => 'products',
                     'products' => $discovery['products'],
                     'pagination' => [
                         'total_records' => (int)$discovery['total_records'],
@@ -3335,6 +5458,297 @@ class Api extends CI_Controller
                 'no_nearby_vendors' => (bool)($discovery['no_nearby_vendors'] ?? false)
             ]));
     }
+
+    /**
+     * Search suggestions across products, brands, and store names
+     */
+    public function search_suggestions()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $q = trim($this->input->get('q', true) ?? $this->input->get('search', true) ?? '');
+        if (strlen($q) < 2) {
+            return $this->output
+                ->set_status_header(200)
+                ->set_output(json_encode([
+                    'status' => true,
+                    'code' => 200,
+                    'message' => 'Query too short',
+                    'data' => [
+                        'products' => [],
+                        'brands' => [],
+                        'stores' => []
+                    ]
+                ]));
+        }
+
+        $this->resolve_customer_location($cust_lat, $cust_lon);
+        $this->load->helper('distance');
+        $delivery_radius_km = get_delivery_radius_km();
+
+        // 1. Stores matching query
+        $stores = [];
+        $vendors = $this->db
+            ->select('id, name, store_name, address, pincode, latitude, longitude, store_photo')
+            ->where('role', 'vendor')
+            ->where('is_active', 1)
+            ->group_start()
+                ->like('store_name', $q)
+                ->or_like('name', $q)
+            ->group_end()
+            ->limit(10)
+            ->get('users')
+            ->result();
+
+        foreach ($vendors as $v) {
+            $dist = null;
+            if ($cust_lat !== null && $cust_lon !== null && is_numeric($v->latitude) && is_numeric($v->longitude) && (float)$v->latitude != 0) {
+                $dist = calculate_distance_km($cust_lat, $cust_lon, $v->latitude, $v->longitude);
+                if ($dist > $delivery_radius_km) {
+                    continue;
+                }
+            }
+            $stores[] = [
+                'id' => (int)$v->id,
+                'name' => !empty($v->store_name) ? $v->store_name : $v->name,
+                'address' => $v->address,
+                'store_photo_url' => !empty($v->store_photo) ? base_url($v->store_photo) : null,
+                'distance_km' => $dist !== null ? round((float)$dist, 1) : null
+            ];
+        }
+        $stores = array_slice($stores, 0, 5);
+
+        // Find qualifying vendor IDs within delivery radius
+        $qualifying_vendor_ids = [];
+        if ($cust_lat !== null && $cust_lon !== null) {
+            $all_v = $this->db->select('id, latitude, longitude')
+                ->where('role', 'vendor')
+                ->where('is_active', 1)
+                ->get('users')
+                ->result();
+            foreach ($all_v as $v) {
+                if (is_numeric($v->latitude) && is_numeric($v->longitude) && (float)$v->latitude != 0) {
+                    if (calculate_distance_km($cust_lat, $cust_lon, $v->latitude, $v->longitude) <= $delivery_radius_km) {
+                        $qualifying_vendor_ids[] = (int)$v->id;
+                    }
+                }
+            }
+        }
+
+        // 2. Brands matching query
+        $brands = [];
+        $this->db->select('brand, COUNT(id) as count')
+            ->from('vendor_products')
+            ->where('is_active', 1)
+            ->where('stock >', 0)
+            ->where('brand IS NOT NULL', null, false)
+            ->where('TRIM(brand) !=', '')
+            ->like('brand', $q)
+            ->group_by('brand')
+            ->order_by('count', 'DESC')
+            ->limit(6);
+        if (!empty($qualifying_vendor_ids)) {
+            $this->db->where_in('vendor_id', $qualifying_vendor_ids);
+        }
+        $brand_rows = $this->db->get()->result();
+        foreach ($brand_rows as $b) {
+            $brands[] = [
+                'name' => trim($b->brand),
+                'count' => (int)$b->count
+            ];
+        }
+
+        // 3. Products matching query
+        $products = [];
+        $this->db->select('vp.id, vp.product_name, vp.brand, vp.unit, vp.selling_price as sale_price, vp.mrp as price, vp.image, p.image as master_image, c.name as category_name, u.store_name, u.name as vendor_name')
+            ->from('vendor_products vp')
+            ->join('products p', 'p.id = vp.product_id', 'left')
+            ->join('categories c', 'c.id = vp.category_id', 'left')
+            ->join('users u', 'u.id = vp.vendor_id', 'left')
+            ->where('vp.is_active', 1)
+            ->where('vp.stock >', 0)
+            ->group_start()
+                ->like('vp.product_name', $q)
+                ->or_like('vp.brand', $q)
+                ->or_like('c.name', $q)
+            ->group_end()
+            ->order_by('vp.product_name', 'ASC')
+            ->limit(12);
+        if (!empty($qualifying_vendor_ids)) {
+            $this->db->where_in('vp.vendor_id', $qualifying_vendor_ids);
+        }
+        $prod_rows = $this->db->get()->result();
+
+        $seen_names = [];
+        foreach ($prod_rows as $pr) {
+            $clean_pname = strtolower(trim($pr->product_name));
+            if (isset($seen_names[$clean_pname])) continue;
+            $seen_names[$clean_pname] = true;
+
+            $img = !empty($pr->image) ? $pr->image : $pr->master_image;
+            $products[] = [
+                'id' => (int)$pr->id,
+                'name' => $pr->product_name,
+                'brand' => $pr->brand,
+                'unit' => $pr->unit,
+                'sale_price' => (float)$pr->sale_price,
+                'price' => (float)$pr->price,
+                'store_name' => !empty($pr->store_name) ? $pr->store_name : $pr->vendor_name,
+                'category_name' => $pr->category_name,
+                'image_url' => !empty($img) ? base_url($img) : null
+            ];
+            if (count($products) >= 6) break;
+        }
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Search suggestions retrieved successfully',
+                'data' => [
+                    'products' => $products,
+                    'brands' => $brands,
+                    'stores' => $stores
+                ]
+            ]));
+    }
+
+    /**
+     * Get recent searches for authenticated customer
+     */
+    public function get_recent_searches()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->get_optional_user_id();
+
+        if ($user_id) {
+            $rows = $this->db
+                ->select('search_query, MAX(created_at) as last_searched')
+                ->where('user_id', $user_id)
+                ->group_by('search_query')
+                ->order_by('last_searched', 'DESC')
+                ->limit(10)
+                ->get('recent_searches')
+                ->result();
+            $queries = array_values(array_map(function($r) { return $r->search_query; }, $rows));
+        } else {
+            $queries = [];
+        }
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Recent searches retrieved successfully',
+                'data' => $queries
+            ]));
+    }
+
+    /**
+     * Save recent search query
+     */
+    public function save_recent_search()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $raw_input = json_decode($this->input->raw_input_stream, true);
+        if (!$raw_input) {
+            $raw_input = json_decode(file_get_contents('php://input'), true);
+        }
+        $query = trim(
+            $raw_input['query'] ?? 
+            $raw_input['search_query'] ?? 
+            $this->input->post('query', true) ?? 
+            $this->input->post('search_query', true) ?? 
+            $this->input->get('query', true) ?? 
+            $this->input->get('q', true) ?? 
+            ''
+        );
+
+        if (empty($query)) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode([
+                    'status' => false,
+                    'code' => 400,
+                    'message' => 'Query cannot be empty',
+                    'data' => null
+                ]));
+        }
+
+        $user_id = $this->get_optional_user_id();
+        if ($user_id) {
+            $this->db->where('user_id', $user_id)
+                     ->where('LOWER(search_query)', strtolower($query))
+                     ->delete('recent_searches');
+
+            $this->db->insert('recent_searches', [
+                'user_id' => $user_id,
+                'search_query' => $query,
+                'created_at' => date('Y-m-d H:i:s')
+            ]);
+        }
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Recent search saved successfully',
+                'data' => [
+                    'query' => $query
+                ]
+            ]));
+    }
+
+    /**
+     * Clear recent searches
+     */
+    public function clear_recent_searches()
+    {
+        $this->ensureMethod('POST');
+        $this->output->set_content_type('application/json');
+
+        $user_id = $this->get_optional_user_id();
+        if ($user_id) {
+            $this->db->where('user_id', $user_id)->delete('recent_searches');
+        }
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status' => true,
+                'code' => 200,
+                'message' => 'Recent searches cleared successfully',
+                'data' => null
+            ]));
+    }
+
+    /**
+     * Helper to retrieve authenticated user ID without terminating execution for guests
+     */
+    private function get_optional_user_id()
+    {
+        $authHeader = $this->input->get_request_header('Authorization', TRUE);
+        if ($authHeader && preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+            try {
+                $decoded = \Firebase\JWT\JWT::decode($matches[1], new \Firebase\JWT\Key($this->jwt_secret, 'HS256'));
+                if ($decoded && !empty($decoded->data->id)) {
+                    return (int)$decoded->data->id;
+                }
+            } catch (\Exception $e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
 
     /**
      * Get user profile details
@@ -3687,7 +6101,7 @@ class Api extends CI_Controller
 
     private function get_vendor_products_query()
     {
-        $this->db->select('vp.id, vp.vendor_id, vp.product_id, vp.variant_id, vp.product_name as name, vp.brand, vp.category_id, vp.unit, vp.mrp as price, vp.selling_price as sale_price, vp.stock, vp.description, COALESCE(vp.image, p.image) as image, vp.is_active, c.name as category_name, u.name as vendor_name, u.store_name, u.address as store_address, u.contact_number as store_contact, u.opening_time as store_opening_time, u.closing_time as store_closing_time, u.store_photo, u.latitude as vendor_latitude, u.longitude as vendor_longitude');
+        $this->db->select('vp.id, vp.vendor_id, vp.product_id, vp.variant_id, vp.product_name as name, vp.brand, vp.category_id, vp.unit, vp.mrp as price, vp.selling_price as sale_price, vp.stock, vp.temporarily_unavailable, vp.description, COALESCE(vp.image, p.image) as image, vp.is_active, c.name as category_name, u.name as vendor_name, u.store_name, u.address as store_address, u.contact_number as store_contact, u.opening_time as store_opening_time, u.closing_time as store_closing_time, u.store_photo, u.latitude as vendor_latitude, u.longitude as vendor_longitude, u.prep_time_minutes, u.slot_immediately_enabled, u.slot_later_enabled, u.slot_lunch_enabled, u.slot_dinner_enabled, u.store_status, u.is_holiday');
         $this->db->from('vendor_products vp');
         $this->db->join('products p', 'p.id = vp.product_id', 'left');
         $this->db->join('categories c', 'c.id = vp.category_id', 'left');
@@ -3795,7 +6209,6 @@ class Api extends CI_Controller
         // Query candidate vendor products
         $this->get_vendor_products_query();
         $this->db->where('vp.is_active', 1);
-        $this->db->where('vp.stock >', 0); // Exclude zero stock
         $this->db->where('u.latitude IS NOT NULL', null, false);
         $this->db->where('u.longitude IS NOT NULL', null, false);
         $this->db->where('u.role', 'vendor');
@@ -3814,8 +6227,31 @@ class Api extends CI_Controller
             $this->db->where('vp.brand', $options['brand']);
         }
 
+        // Filter: Unit
+        if (!empty($options['units'])) {
+            $this->db->where_in('vp.unit', $options['units']);
+        } elseif (!empty($options['unit'])) {
+            $this->db->where('vp.unit', $options['unit']);
+        }
+
+        // Filter: Fulfilment
+        if (!empty($options['fulfilment'])) {
+            $req_f = strtolower(trim($options['fulfilment']));
+            if ($req_f === 'immediate') {
+                $this->db->where('u.slot_immediately_enabled', 1);
+            } elseif ($req_f === 'slots') {
+                $this->db->group_start();
+                $this->db->where('u.slot_lunch_enabled', 1);
+                $this->db->or_where('u.slot_dinner_enabled', 1);
+                $this->db->or_where('u.slot_later_enabled', 1);
+                $this->db->group_end();
+            }
+        }
+
         // Filter: Vendor ID
-        if (!empty($options['vendor_id'])) {
+        if (!empty($options['vendor_ids'])) {
+            $this->db->where_in('vp.vendor_id', $options['vendor_ids']);
+        } elseif (!empty($options['vendor_id'])) {
             $this->db->where('vp.vendor_id', (int)$options['vendor_id']);
         }
 
@@ -3842,6 +6278,8 @@ class Api extends CI_Controller
         $qualifying_rows = [];
         $facet_categories = [];
         $facet_brands = [];
+        $facet_units = [];
+        $facet_stores = [];
         $facet_min_price = null;
         $facet_max_price = null;
 
@@ -3849,6 +6287,51 @@ class Api extends CI_Controller
             $dist = calculate_distance_km($cust_lat, $cust_lon, $row->vendor_latitude, $row->vendor_longitude);
             // Must be within configurable delivery radius
             if ($dist <= $delivery_radius_km) {
+                // Compute factual store open status
+                $is_store_open = true;
+                if (isset($row->store_status) && strtolower((string)$row->store_status) === 'closed') {
+                    $is_store_open = false;
+                } elseif (isset($row->is_holiday) && (int)$row->is_holiday === 1) {
+                    $is_store_open = false;
+                } elseif (!empty($row->store_opening_time) && !empty($row->store_closing_time) && $row->store_opening_time !== '00:00:00' && $row->store_closing_time !== '00:00:00') {
+                    $now_time = date('H:i:s');
+                    $open_t = $row->store_opening_time;
+                    $close_t = $row->store_closing_time;
+                    if ($open_t <= $close_t) {
+                        $is_store_open = ($now_time >= $open_t && $now_time <= $close_t);
+                    } else {
+                        $is_store_open = ($now_time >= $open_t || $now_time <= $close_t);
+                    }
+                }
+                $row->is_store_open = $is_store_open;
+                $stock_class = classify_stock_state($row->stock, $row->temporarily_unavailable ?? 0);
+                $row->stock_status = $stock_class['stock_status'];
+                $row->stock_status_label = $stock_class['stock_status_label'];
+                $row->is_purchasable = $stock_class['is_purchasable'] && $is_store_open;
+                $row->can_add_to_cart = $stock_class['can_add_to_cart'] && $is_store_open;
+                $row->low_stock_threshold = $stock_class['low_stock_threshold'];
+                $row->temporarily_unavailable = (int)($row->temporarily_unavailable ?? 0);
+                $row->is_available = $row->is_purchasable;
+
+                // Compute fulfilment label
+                if (!empty($row->slot_immediately_enabled) && (int)$row->slot_immediately_enabled === 1) {
+                    $row->fulfilment_option = 'Immediate Delivery';
+                } elseif ((!empty($row->slot_lunch_enabled) && (int)$row->slot_lunch_enabled === 1) || (!empty($row->slot_dinner_enabled) && (int)$row->slot_dinner_enabled === 1) || (!empty($row->slot_later_enabled) && (int)$row->slot_later_enabled === 1)) {
+                    $row->fulfilment_option = 'Scheduled Slots';
+                } else {
+                    $row->fulfilment_option = 'Standard Delivery';
+                }
+
+                // Filter: Availability
+                if (!empty($options['availability']) && ($options['availability'] === 'in_stock' || $options['availability'] === '1')) {
+                    if (!$row->is_available) continue;
+                }
+
+                // Filter: In stock only (Strictly available products for Home page, hiding Unavailable and Low Stock)
+                if (!empty($options['in_stock_only'])) {
+                    if ($row->stock_status !== 'available') continue;
+                }
+
                 $row->distance_km = $dist;
                 $row->image_url = !empty($row->image) ? base_url($row->image) : null;
                 $row->store_photo_url = !empty($row->store_photo) ? base_url($row->store_photo) : null;
@@ -3879,6 +6362,30 @@ class Api extends CI_Controller
                     $facet_brands[$bname]['count']++;
                 }
 
+                if (!empty($row->unit)) {
+                    $uname = trim($row->unit);
+                    if (!isset($facet_units[$uname])) {
+                        $facet_units[$uname] = [
+                            'name' => $uname,
+                            'count' => 0
+                        ];
+                    }
+                    $facet_units[$uname]['count']++;
+                }
+
+                if (!empty($row->vendor_id)) {
+                    $vid = (int)$row->vendor_id;
+                    $sname = !empty($row->store_name) ? $row->store_name : ($row->vendor_name ?? 'Store');
+                    if (!isset($facet_stores[$vid])) {
+                        $facet_stores[$vid] = [
+                            'id' => $vid,
+                            'name' => $sname,
+                            'count' => 0
+                        ];
+                    }
+                    $facet_stores[$vid]['count']++;
+                }
+
                 $p = (float)$row->sale_price;
                 if ($facet_min_price === null || $p < $facet_min_price) $facet_min_price = $p;
                 if ($facet_max_price === null || $p > $facet_max_price) $facet_max_price = $p;
@@ -3886,12 +6393,10 @@ class Api extends CI_Controller
         }
 
         // Group same product across multiple vendors:
-        // Priority: variant_id > product_id > normalized product name
+        // Priority: product_id > normalized product name (do not split variants into separate cards)
         $groups = [];
         foreach ($qualifying_rows as $row) {
-            if (!empty($row->variant_id)) {
-                $group_key = 'var_' . $row->variant_id;
-            } elseif (!empty($row->product_id)) {
+            if (!empty($row->product_id)) {
                 $group_key = 'prod_' . $row->product_id;
             } else {
                 $clean_name = strtolower(trim(preg_replace('/[^a-zA-Z0-9]/', '', $row->name)));
@@ -3924,29 +6429,78 @@ class Api extends CI_Controller
                 return ($stockA > $stockB) ? -1 : 1;
             });
 
-            // Winning offer is the #1 option
+            // Winning offer is the #1 option (lowest price)
             $winner = $group_items[0];
 
-            // Other qualifying vendors become alternatives
+            // Build variants summary for the winner vendor / product
+            $variants_list = [];
+            $seen_var_keys = [];
+            foreach ($group_items as $gi) {
+                if ((int)$gi->vendor_id === (int)$winner->vendor_id) {
+                    $vk = !empty($gi->variant_id) ? 'vid_' . $gi->variant_id : 'id_' . $gi->id;
+                    if (!isset($seen_var_keys[$vk])) {
+                        $seen_var_keys[$vk] = true;
+                        $v_stock_class = classify_stock_state($gi->stock, $gi->temporarily_unavailable ?? 0);
+                        $variants_list[] = [
+                            'id'                => (int)$gi->id,
+                            'vendor_product_id' => (int)$gi->id,
+                            'product_id'        => (int)$gi->product_id,
+                            'variant_id'        => !empty($gi->variant_id) ? (int)$gi->variant_id : null,
+                            'variant_name'      => !empty($gi->unit) ? $gi->unit : $gi->name,
+                            'unit'              => $gi->unit ?? '',
+                            'price'             => (float)$gi->price,
+                            'sale_price'        => (float)$gi->sale_price,
+                            'stock'             => (int)$gi->stock,
+                            'temporarily_unavailable' => (int)($gi->temporarily_unavailable ?? 0),
+                            'stock_status'      => $v_stock_class['stock_status'],
+                            'stock_status_label'=> $v_stock_class['stock_status_label'],
+                            'is_purchasable'    => $v_stock_class['is_purchasable'] && ($gi->is_store_open ?? true),
+                            'can_add_to_cart'   => $v_stock_class['can_add_to_cart'] && ($gi->is_store_open ?? true),
+                        ];
+                    }
+                }
+            }
+            $winner->variants = $variants_list;
+            $winner->has_variants = count($variants_list) > 1;
+            $winner->variant_count = count($variants_list);
+
+            // Other qualifying vendors become alternative sellers (distinct stores)
             $alternatives = [];
+            $seen_alt_vendors = [(int)$winner->vendor_id => true];
             for ($i = 1; $i < count($group_items); $i++) {
                 $alt = $group_items[$i];
-                $alternatives[] = [
-                    'vendor_product_id' => (int)$alt->id,
-                    'vendor_id'         => (int)$alt->vendor_id,
-                    'vendor_name'       => $alt->vendor_name,
-                    'store_name'        => $alt->store_name,
-                    'store_address'     => $alt->store_address,
-                    'price'             => (float)$alt->price,
-                    'sale_price'        => (float)$alt->sale_price,
-                    'stock'             => (int)$alt->stock,
-                    'distance_km'       => (float)$alt->distance_km,
-                ];
+                $alt_vid = (int)$alt->vendor_id;
+                if (!isset($seen_alt_vendors[$alt_vid])) {
+                    $seen_alt_vendors[$alt_vid] = true;
+                    $alt_stock_class = classify_stock_state($alt->stock, $alt->temporarily_unavailable ?? 0);
+                    $alternatives[] = [
+                        'vendor_product_id' => (int)$alt->id,
+                        'vendor_id'         => $alt_vid,
+                        'vendor_name'       => $alt->vendor_name,
+                        'store_name'        => $alt->store_name,
+                        'store_address'     => $alt->store_address,
+                        'price'             => (float)$alt->price,
+                        'sale_price'        => (float)$alt->sale_price,
+                        'stock'             => (int)$alt->stock,
+                        'temporarily_unavailable' => (int)($alt->temporarily_unavailable ?? 0),
+                        'stock_status'      => $alt_stock_class['stock_status'],
+                        'stock_status_label'=> $alt_stock_class['stock_status_label'],
+                        'distance_km'       => (float)$alt->distance_km,
+                        'fulfilment_option' => $alt->fulfilment_option ?? 'Standard Delivery',
+                        'is_store_open'     => $alt->is_store_open ?? true,
+                        'is_available'      => $alt_stock_class['is_purchasable'] && ($alt->is_store_open ?? true),
+                        'is_purchasable'    => $alt_stock_class['is_purchasable'] && ($alt->is_store_open ?? true),
+                        'can_add_to_cart'   => $alt_stock_class['can_add_to_cart'] && ($alt->is_store_open ?? true),
+                    ];
+                }
             }
 
             $winner->alternatives = $alternatives;
-            $winner->total_vendors_count = count($group_items);
+            $winner->total_vendors_count = count($seen_alt_vendors);
             $winner->delivery_radius_km = $delivery_radius_km;
+            $winner->fulfilment_option = $winner->fulfilment_option ?? 'Standard Delivery';
+            $winner->is_store_open = $winner->is_store_open ?? true;
+            $winner->is_available = $winner->is_available ?? true;
 
             // Price range filter on winning offer
             if (isset($options['min_price']) && is_numeric($options['min_price'])) {
@@ -3959,39 +6513,78 @@ class Api extends CI_Controller
             $ranked_products[] = $winner;
         }
 
-        // Group-level sorting
+        // Helper to check if a product is unavailable / out of stock
+        $is_unavail = function ($item) {
+            return (
+                empty($item->is_available) ||
+                $item->stock_status === 'out_of_stock' ||
+                $item->stock_status === 'temporarily_unavailable' ||
+                (int)($item->stock ?? 0) <= 0
+            );
+        };
+
+        // Group-level sorting (always push unavailable products to the very last)
         $sort_by = $options['sort_by'] ?? 'relevance';
         switch ($sort_by) {
             case 'price_low_to_high':
-                usort($ranked_products, function ($a, $b) {
+                usort($ranked_products, function ($a, $b) use ($is_unavail) {
+                    $a_u = $is_unavail($a);
+                    $b_u = $is_unavail($b);
+                    if ($a_u !== $b_u) return $a_u ? 1 : -1;
                     return ((float)$a->sale_price < (float)$b->sale_price) ? -1 : 1;
                 });
                 break;
             case 'price_high_to_low':
-                usort($ranked_products, function ($a, $b) {
+                usort($ranked_products, function ($a, $b) use ($is_unavail) {
+                    $a_u = $is_unavail($a);
+                    $b_u = $is_unavail($b);
+                    if ($a_u !== $b_u) return $a_u ? 1 : -1;
                     return ((float)$a->sale_price > (float)$b->sale_price) ? -1 : 1;
+                });
+                break;
+            case 'availability':
+                usort($ranked_products, function ($a, $b) use ($is_unavail) {
+                    $a_u = $is_unavail($a);
+                    $b_u = $is_unavail($b);
+                    if ($a_u !== $b_u) return $a_u ? 1 : -1;
+                    if ((int)$a->stock !== (int)$b->stock) {
+                        return ((int)$a->stock > (int)$b->stock) ? -1 : 1;
+                    }
+                    return ((float)$a->sale_price < (float)$b->sale_price) ? -1 : 1;
                 });
                 break;
             case 'distance_asc':
             case 'nearest':
-                usort($ranked_products, function ($a, $b) {
+                usort($ranked_products, function ($a, $b) use ($is_unavail) {
+                    $a_u = $is_unavail($a);
+                    $b_u = $is_unavail($b);
+                    if ($a_u !== $b_u) return $a_u ? 1 : -1;
                     return ((float)$a->distance_km < (float)$b->distance_km) ? -1 : 1;
                 });
                 break;
             case 'name_asc':
-                usort($ranked_products, function ($a, $b) {
+                usort($ranked_products, function ($a, $b) use ($is_unavail) {
+                    $a_u = $is_unavail($a);
+                    $b_u = $is_unavail($b);
+                    if ($a_u !== $b_u) return $a_u ? 1 : -1;
                     return strcasecmp($a->name, $b->name);
                 });
                 break;
             case 'name_desc':
-                usort($ranked_products, function ($a, $b) {
+                usort($ranked_products, function ($a, $b) use ($is_unavail) {
+                    $a_u = $is_unavail($a);
+                    $b_u = $is_unavail($b);
+                    if ($a_u !== $b_u) return $a_u ? 1 : -1;
                     return strcasecmp($b->name, $a->name);
                 });
                 break;
             case 'newest':
             case 'relevance':
             default:
-                usort($ranked_products, function ($a, $b) {
+                usort($ranked_products, function ($a, $b) use ($is_unavail) {
+                    $a_u = $is_unavail($a);
+                    $b_u = $is_unavail($b);
+                    if ($a_u !== $b_u) return $a_u ? 1 : -1;
                     if (abs((float)$a->distance_km - (float)$b->distance_km) > 1.5) {
                         return ((float)$a->distance_km < (float)$b->distance_km) ? -1 : 1;
                     }
@@ -4021,12 +6614,139 @@ class Api extends CI_Controller
             'filters' => [
                 'categories' => array_values($facet_categories),
                 'brands' => array_values($facet_brands),
+                'units' => array_values($facet_units),
+                'stores' => array_values($facet_stores),
                 'price_range' => [
                     'min' => $facet_min_price !== null ? (float)$facet_min_price : 0,
                     'max' => $facet_max_price !== null ? (float)$facet_max_price : 0
                 ]
             ]
         ];
+    }
+
+    /**
+     * Helper to fetch nearby stores based on customer location.
+     * Uses Haversine distance, checks delivery radius, computes factual Open/Closed status,
+     * categories offered, and distance.
+     */
+    public function get_nearby_stores_data($cust_lat, $cust_lon, $limit = 20)
+    {
+        $this->load->helper('distance');
+        $delivery_radius_km = get_delivery_radius_km();
+
+        $vendors = $this->db
+            ->select('id, name, store_name, address, pincode, latitude, longitude, opening_time, closing_time, is_holiday, store_status, store_photo, contact_number')
+            ->where('role', 'vendor')
+            ->where('is_active', 1)
+            ->where('latitude IS NOT NULL', null, false)
+            ->where('longitude IS NOT NULL', null, false)
+            ->get('users')
+            ->result();
+
+        $stores = [];
+        $now_time = date('H:i:s');
+
+        foreach ($vendors as $v) {
+            if (!is_numeric($v->latitude) || !is_numeric($v->longitude) || ((float)$v->latitude == 0 && (float)$v->longitude == 0)) {
+                continue;
+            }
+
+            $dist = ($cust_lat !== null && $cust_lon !== null)
+                ? calculate_distance_km($cust_lat, $cust_lon, $v->latitude, $v->longitude)
+                : null;
+
+            // Only include stores within delivery radius if location is provided
+            if ($dist !== null && $dist > $delivery_radius_km) {
+                continue;
+            }
+
+            // Calculate factual Open/Closed status
+            $is_open = true;
+            $status_reason = 'Operating normally';
+            if (isset($v->store_status) && strtolower((string)$v->store_status) === 'closed') {
+                $is_open = false;
+                $status_reason = 'Store is currently closed';
+            } elseif (isset($v->is_holiday) && (int)$v->is_holiday === 1) {
+                $is_open = false;
+                $status_reason = 'On holiday';
+            } elseif (!empty($v->opening_time) && !empty($v->closing_time) && $v->opening_time !== '00:00:00' && $v->closing_time !== '00:00:00') {
+                $open_t = $v->opening_time;
+                $close_t = $v->closing_time;
+                if ($open_t <= $close_t) {
+                    $is_open = ($now_time >= $open_t && $now_time <= $close_t);
+                } else {
+                    $is_open = ($now_time >= $open_t || $now_time <= $close_t);
+                }
+                if (!$is_open) {
+                    $status_reason = 'Outside operating hours';
+                }
+            }
+
+            // Format operating hours string
+            $operating_hours = 'Hours not specified';
+            if (!empty($v->opening_time) && !empty($v->closing_time)) {
+                $formatted_open = date('h:i A', strtotime($v->opening_time));
+                $formatted_close = date('h:i A', strtotime($v->closing_time));
+                $operating_hours = "{$formatted_open} - {$formatted_close}";
+            }
+
+            // Fetch distinct categories that this store actually carries products for
+            $cats_query = $this->db
+                ->select('c.id, c.name, COUNT(vp.id) as product_count')
+                ->from('vendor_products vp')
+                ->join('categories c', 'c.id = vp.category_id')
+                ->where('vp.vendor_id', (int)$v->id)
+                ->where('vp.is_active', 1)
+                ->where('vp.stock >', 0)
+                ->group_by('c.id')
+                ->order_by('product_count', 'DESC')
+                ->get()
+                ->result();
+
+            $category_names = array_map(function($c) { return $c->name; }, $cats_query);
+            $category_summary = !empty($category_names) ? implode(', ', array_slice($category_names, 0, 3)) : 'General Grocery';
+            $total_products = array_reduce($cats_query, function($carry, $c) { return $carry + (int)$c->product_count; }, 0);
+
+            $stores[] = [
+                'id'                 => (int)$v->id,
+                'name'               => $v->name,
+                'store_name'         => !empty($v->store_name) ? $v->store_name : $v->name,
+                'store_photo'        => $v->store_photo,
+                'store_photo_url'    => !empty($v->store_photo) ? base_url($v->store_photo) : null,
+                'address'            => $v->address,
+                'pincode'            => $v->pincode,
+                'contact_number'     => $v->contact_number,
+                'latitude'           => (float)$v->latitude,
+                'longitude'          => (float)$v->longitude,
+                'distance_km'        => $dist !== null ? (float)$dist : null,
+                'distance_text'      => $dist !== null ? ($dist < 1 ? round($dist * 1000) . ' m' : round($dist, 1) . ' km') : null,
+                'store_status'       => $v->store_status ?? 'open',
+                'is_holiday'         => (int)($v->is_holiday ?? 0),
+                'opening_time'       => $v->opening_time,
+                'closing_time'       => $v->closing_time,
+                'operating_hours'    => $operating_hours,
+                'is_open'            => $is_open,
+                'status_label'       => $is_open ? 'Open' : 'Closed',
+                'status_reason'      => $status_reason,
+                'category_summary'   => $category_summary,
+                'categories'         => $cats_query,
+                'product_count'      => $total_products,
+            ];
+        }
+
+        // Sort by distance ASC
+        usort($stores, function($a, $b) {
+            if ($a['distance_km'] === null && $b['distance_km'] === null) return 0;
+            if ($a['distance_km'] === null) return 1;
+            if ($b['distance_km'] === null) return -1;
+            return ($a['distance_km'] < $b['distance_km']) ? -1 : 1;
+        });
+
+        if ($limit > 0) {
+            $stores = array_slice($stores, 0, $limit);
+        }
+
+        return $stores;
     }
 
     private function insert_order_items(int $order_id, array $items): void
@@ -4127,24 +6847,44 @@ class Api extends CI_Controller
             return null;
         }
 
-        // Get order items
+        // Get order items with vendor/store details
         $items = $this->db
-            ->select('id, product_id, product_name, product_image, price, gst_percent, gst_amount, quantity, subtotal, vendor_id')
-            ->where('order_id', $order_id)
-            ->get('order_items')
+            ->select('oi.id, oi.product_id, oi.product_name, oi.product_image, oi.price, oi.gst_percent, oi.gst_amount, oi.quantity, oi.subtotal, oi.vendor_id, u.store_name, u.name as vendor_name')
+            ->from('order_items oi')
+            ->join('users u', 'u.id = oi.vendor_id', 'left')
+            ->where('oi.order_id', $order_id)
+            ->get()
             ->result_array();
 
+        $store_map = [];
         foreach ($items as &$item) {
             $item['product_image'] = $this->get_product_image_url($item['product_image']);
             $item['id'] = (int) $item['id'];
             $item['product_id'] = (int) $item['product_id'];
             $item['vendor_id'] = (int) $item['vendor_id'];
+            $item['store_name'] = !empty($item['store_name']) ? $item['store_name'] : (!empty($item['vendor_name']) ? $item['vendor_name'] : 'Store #' . $item['vendor_id']);
+            $item['vendor_name'] = !empty($item['vendor_name']) ? $item['vendor_name'] : $item['store_name'];
             $item['price'] = (float) $item['price'];
             $item['gst_percent'] = (float) $item['gst_percent'];
             $item['gst_amount'] = (float) $item['gst_amount'];
             $item['quantity'] = (int) $item['quantity'];
             $item['subtotal'] = (float) $item['subtotal'];
             $item['total_amount'] = round($item['subtotal'] + $item['gst_amount'], 2);
+
+            $vid = $item['vendor_id'];
+            if (!isset($store_map[$vid])) {
+                $store_map[$vid] = [
+                    'vendor_id'   => $vid,
+                    'store_name'  => $item['store_name'],
+                    'vendor_name' => $item['vendor_name'],
+                    'items'       => [],
+                    'items_count' => 0,
+                    'subtotal'    => 0.00
+                ];
+            }
+            $store_map[$vid]['items'][] = $item;
+            $store_map[$vid]['items_count'] += $item['quantity'];
+            $store_map[$vid]['subtotal'] = round($store_map[$vid]['subtotal'] + $item['total_amount'], 2);
         }
 
         // Get delivery address
@@ -4194,6 +6934,9 @@ class Api extends CI_Controller
             'invoice_url'        => in_array($order['status'], ['out_for_delivery', 'delivered'], true) && !empty($order['invoice_url']) ? base_url($order['invoice_url']) : (in_array($order['status'], ['out_for_delivery', 'delivered'], true) ? base_url('api/user/order_invoice/' . $order['id']) : null),
             'can_download_invoice' => in_array($order['status'], ['out_for_delivery', 'delivered'], true),
             'items'              => $items,
+            'stores'             => array_values($store_map),
+            'stores_count'       => count($store_map),
+            'is_multi_store'     => count($store_map) > 1,
             'delivery_address'   => $delivery_address,
             'status_history'     => $status_history,
         ];

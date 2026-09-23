@@ -92,6 +92,11 @@ $route['orders'] = 'orders/index';
 $route['orders/view/(:num)'] = 'orders/view/$1';
 $route['orders/update-status'] = 'orders/update_status';
 
+// Support Requests Management (Admin)
+$route['support-requests'] = 'support_requests/index';
+$route['support-requests/view/(:num)'] = 'support_requests/view/$1';
+$route['support-requests/update-status'] = 'support_requests/update_status';
+
 // Settings
 $route['settings/profile'] = 'profile/index';
 $route['settings/delivery'] = 'settings/index';
@@ -141,6 +146,7 @@ $route['api/user/get_vendor_dashboard'] = 'user/api/get_vendor_dashboard';
 $route['api/user/get_vendor_stats'] = 'user/api/get_vendor_stats';
 $route['api/get_customer'] = 'api/get_customer';
 $route['api/get_report'] = 'api/get_report';
+$route['api/get_vendor_complaints'] = 'api/get_vendor_complaints';
 
 // User API Routes
 $route['api/user/register_send_otp'] = 'user/api/register_send_otp';
@@ -158,10 +164,19 @@ $route['api/user/get_products_by_category/(:num)'] = 'user/api/get_products_by_c
 $route['api/user/get_product_list'] = 'user/api/get_product_list';
 $route['api/user/get_product_detail'] = 'user/api/get_product_detail';
 $route['api/user/get_product_detail/(:num)'] = 'user/api/get_product_detail/$1';
+$route['api/user/get_nearby_stores'] = 'user/api/get_nearby_stores';
+$route['api/user/get_store_detail'] = 'user/api/get_store_detail';
+$route['api/user/get_store_detail/(:num)'] = 'user/api/get_store_detail/$1';
+$route['api/user/get_store_products'] = 'user/api/get_store_products';
+$route['api/user/get_store_products/(:num)'] = 'user/api/get_store_products/$1';
 $route['api/user/get_profile'] = 'user/api/get_profile';
 $route['api/user/update_profile'] = 'user/api/update_profile';
 $route['api/user/search_products'] = 'user/api/search_products';
 $route['api/user/search_categories'] = 'user/api/search_categories';
+$route['api/user/search_suggestions'] = 'user/api/search_suggestions';
+$route['api/user/get_recent_searches'] = 'user/api/get_recent_searches';
+$route['api/user/save_recent_search'] = 'user/api/save_recent_search';
+$route['api/user/clear_recent_searches'] = 'user/api/clear_recent_searches';
 
 // Cart API Routes
 $route['api/user/get_cart_row'] = 'user/api/get_cart_row';
@@ -182,6 +197,22 @@ $route['api/user/update_wishlist_quantity'] = 'user/api/update_wishlist_quantity
 $route['api/user/remove_from_wishlist'] = 'user/api/remove_from_wishlist';
 $route['api/user/add_all_to_cart'] = 'user/api/add_all_to_cart';
 
+// Saved Stores API Routes
+$route['api/user/save_store'] = 'user/api/save_store';
+$route['api/user/unsave_store'] = 'user/api/unsave_store';
+$route['api/user/get_saved_stores'] = 'user/api/get_saved_stores';
+$route['api/user/is_store_saved'] = 'user/api/is_store_saved';
+
+// Shopping Lists API Routes
+$route['api/user/shopping_lists'] = 'user/api/get_shopping_lists';
+$route['api/user/create_shopping_list'] = 'user/api/create_shopping_list';
+$route['api/user/rename_shopping_list'] = 'user/api/rename_shopping_list';
+$route['api/user/delete_shopping_list'] = 'user/api/delete_shopping_list';
+$route['api/user/shopping_list_items'] = 'user/api/get_shopping_list_items';
+$route['api/user/add_to_shopping_list'] = 'user/api/add_to_shopping_list';
+$route['api/user/remove_from_shopping_list'] = 'user/api/remove_from_shopping_list';
+$route['api/user/shopping_list_add_all_to_cart'] = 'user/api/shopping_list_add_all_to_cart';
+
 // Address API Routes
 $route['api/user/get_addresses'] = 'user/api/get_addresses';
 $route['api/user/save_address'] = 'user/api/save_address';
@@ -197,6 +228,11 @@ $route['api/user/get_order_details'] = 'user/api/get_order_details';
 $route['api/user/get_order_details/(:num)'] = 'user/api/get_order_details/$1';
 $route['api/user/cancel_order'] = 'user/api/cancel_order';
 $route['api/user/hide_order'] = 'user/api/hide_order';
+
+// Customer Support Request API Routes
+$route['api/user/create_support_request'] = 'user/api/create_support_request';
+$route['api/user/get_order_support_requests'] = 'user/api/get_order_support_requests';
+$route['api/user/get_order_support_requests/(:num)'] = 'user/api/get_order_support_requests/$1';
 
 // Vendor Orders API Routes
 $route['api/user/get_vendor_orders'] = 'user/api/get_vendor_orders';

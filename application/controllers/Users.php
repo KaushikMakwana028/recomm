@@ -364,12 +364,49 @@ class Users extends MY_Controller
                     'name' => $this->post('name'),
                     'mobile' => $this->post('mobile'),
                     'email' => $this->post('email') ?: NULL,
-                    'store_name' => $role == 'vendor' ? $this->post('store_name') : NULL,
-                    'address' => $role == 'user' ? $this->post('address') : NULL,
                     'role' => $role,
                     'is_active' => $this->post('is_active') ? 1 : 0,
                     'created_on' => date('Y-m-d H:i:s')
                 ];
+
+                if ($role == 'vendor') {
+                    $data['store_name'] = $this->post('store_name');
+                    $data['owner_name'] = $this->post('owner_name') ?: NULL;
+                    $data['contact_number'] = $this->post('contact_number') ?: NULL;
+                    $data['gst_number'] = $this->post('gst_number') ?: NULL;
+                    $data['address'] = $this->post('address') ?: NULL;
+                    $data['pincode'] = $this->post('pincode') ?: NULL;
+                    $data['latitude'] = ($this->post('latitude') !== null && $this->post('latitude') !== '') ? (float)$this->post('latitude') : NULL;
+                    $data['longitude'] = ($this->post('longitude') !== null && $this->post('longitude') !== '') ? (float)$this->post('longitude') : NULL;
+                    $data['opening_time'] = $this->post('opening_time') ?: NULL;
+                    $data['closing_time'] = $this->post('closing_time') ?: NULL;
+
+                    // Bank details
+                    $data['account_holder_name'] = $this->post('account_holder_name') ?: NULL;
+                    $data['bank_name'] = $this->post('bank_name') ?: NULL;
+                    $data['account_number'] = $this->post('account_number') ?: NULL;
+                    $data['ifsc_code'] = $this->post('ifsc_code') ? strtoupper(trim($this->post('ifsc_code'))) : NULL;
+                    $data['account_type'] = $this->post('account_type') ?: NULL;
+                    $data['branch_name'] = $this->post('branch_name') ?: NULL;
+
+                    // Store photo upload
+                    if (!empty($_FILES['store_photo']['name'])) {
+                        $store_photo = $this->uploadStorePhoto('store_photo');
+                        if ($store_photo) {
+                            $data['store_photo'] = $store_photo;
+                        }
+                    }
+                } elseif ($role == 'user') {
+                    $data['address'] = $this->post('address') ?: NULL;
+                }
+
+                // Profile image upload
+                if (!empty($_FILES['profile_image']['name'])) {
+                    $profile_image = $this->uploadProfileImage('profile_image');
+                    if ($profile_image) {
+                        $data['profile_image'] = $profile_image;
+                    }
+                }
 
                 if ($this->gm->insert('users', $data)) {
                     $this->setMessage('success', 'User added successfully');
@@ -398,19 +435,56 @@ class Users extends MY_Controller
             $this->form_validation->set_rules('email', 'Email', 'valid_email');
             $this->form_validation->set_rules('role', 'Role', 'required|in_list[admin,vendor,user]');
 
+            $role = $data['user']->role;
+            if ($role == 'vendor') {
+                $this->form_validation->set_rules('store_name', 'Store Name', 'required|trim');
+            }
+
             if ($this->form_validation->run()) {
                 $update_data = [
                     'name' => $this->post('name'),
                     'email' => $this->post('email') ?: NULL,
-                    'role' => $this->post('role'),
                     'is_active' => $this->post('is_active') ? 1 : 0
                 ];
+
+                if ($role == 'vendor') {
+                    $update_data['store_name'] = $this->post('store_name');
+                    $update_data['owner_name'] = $this->post('owner_name') ?: NULL;
+                    $update_data['contact_number'] = $this->post('contact_number') ?: NULL;
+                    $update_data['gst_number'] = $this->post('gst_number') ?: NULL;
+                    $update_data['address'] = $this->post('address') ?: NULL;
+                    $update_data['pincode'] = $this->post('pincode') ?: NULL;
+                    $update_data['latitude'] = ($this->post('latitude') !== null && $this->post('latitude') !== '') ? (float)$this->post('latitude') : NULL;
+                    $update_data['longitude'] = ($this->post('longitude') !== null && $this->post('longitude') !== '') ? (float)$this->post('longitude') : NULL;
+                    $update_data['opening_time'] = $this->post('opening_time') ?: NULL;
+                    $update_data['closing_time'] = $this->post('closing_time') ?: NULL;
+
+                    // Bank details
+                    $update_data['account_holder_name'] = $this->post('account_holder_name') ?: NULL;
+                    $update_data['bank_name'] = $this->post('bank_name') ?: NULL;
+                    $update_data['account_number'] = $this->post('account_number') ?: NULL;
+                    $update_data['ifsc_code'] = $this->post('ifsc_code') ? strtoupper(trim($this->post('ifsc_code'))) : NULL;
+                    $update_data['account_type'] = $this->post('account_type') ?: NULL;
+                    $update_data['branch_name'] = $this->post('branch_name') ?: NULL;
+
+                    if (!empty($_FILES['store_photo']['name'])) {
+                        $store_photo = $this->uploadStorePhoto('store_photo');
+                        if ($store_photo) {
+                            if (!empty($data['user']->store_photo) && file_exists($data['user']->store_photo)) {
+                                @unlink($data['user']->store_photo);
+                            }
+                            $update_data['store_photo'] = $store_photo;
+                        }
+                    }
+                } elseif ($role == 'user') {
+                    $update_data['address'] = $this->post('address') ?: NULL;
+                }
 
                 if (!empty($_FILES['profile_image']['name'])) {
                     $profile_image = $this->uploadProfileImage('profile_image');
                     if ($profile_image) {
                         if ($data['user']->profile_image && file_exists($data['user']->profile_image)) {
-                            unlink($data['user']->profile_image);
+                            @unlink($data['user']->profile_image);
                         }
                         $update_data['profile_image'] = $profile_image;
                     }
@@ -480,14 +554,32 @@ class Users extends MY_Controller
         if (!is_dir($upload_path)) mkdir($upload_path, 0777, true);
 
         $config['upload_path'] = $upload_path;
-        $config['allowed_types'] = 'jpg|jpeg|png|gif';
-        $config['max_size'] = 2048;
+        $config['allowed_types'] = 'jpg|jpeg|png|gif|webp';
+        $config['max_size'] = 5120;
         $config['encrypt_name'] = TRUE;
 
         $this->upload->initialize($config);
 
         if ($this->upload->do_upload($field_name)) {
             return 'assets/uploads/users/' . $this->upload->data()['file_name'];
+        }
+        return false;
+    }
+
+    private function uploadStorePhoto($field_name)
+    {
+        $upload_path = './assets/uploads/stores/';
+        if (!is_dir($upload_path)) mkdir($upload_path, 0777, true);
+
+        $config['upload_path'] = $upload_path;
+        $config['allowed_types'] = 'jpg|jpeg|png|gif|webp';
+        $config['max_size'] = 5120;
+        $config['encrypt_name'] = TRUE;
+
+        $this->upload->initialize($config);
+
+        if ($this->upload->do_upload($field_name)) {
+            return 'assets/uploads/stores/' . $this->upload->data()['file_name'];
         }
         return false;
     }
