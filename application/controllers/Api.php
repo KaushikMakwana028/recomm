@@ -119,7 +119,7 @@ class Api extends CI_Controller
                 ]));
         }
 
-        $otp = '123456';
+        $otp = (string) random_int(100000, 999999);
 
         $this->db->where('mobile', $mobile)->delete('user_registration_otps');
 
@@ -133,7 +133,7 @@ class Api extends CI_Controller
             'created_at' => date('Y-m-d H:i:s')
         ]);
 
-        //$this->send_otp_via_sms($mobile,$otp);
+        $this->send_otp_via_sms($mobile,$otp);
 
         return $this->output
             ->set_status_header(200)
@@ -420,7 +420,7 @@ class Api extends CI_Controller
         // =========================
         // STATIC OTP
         // =========================
-        $otp = '123456';
+        $otp = (string) random_int(100000, 999999);
 
         // delete old otp
         $this->db
@@ -439,7 +439,7 @@ class Api extends CI_Controller
         ]);
 
         // later enable SMS
-        // $this->send_otp_via_sms($mobile, $otp);
+        $this->send_otp_via_sms($mobile, $otp);
 
         return $this->output
             ->set_status_header(200)

@@ -14,81 +14,80 @@ class Users extends MY_Controller
     }
 
     // Main index page - loads view only
-    public function index()
-    {
-        $this->setPageTitle('Users Management');
+  public function index()
+{
+    $this->setPageTitle('Users Management');
 
-        // Get statistics for cards
-        $data['total_users'] = $this->gm->countRows('users', ['role' => 'user']);
-        $data['total_vendors'] = $this->gm->countRows('users', ['role' => 'vendor']);
-        $data['total_admins'] = $this->gm->countRows('users', ['role' => 'admin']);
-        $data['total_all'] = $this->gm->countRows('users');
+    $data['total_users'] = $this->gm->countRows('users', ['role' => 'user']);
+    $data['total_vendors'] = $this->gm->countRows('users', ['role' => 'vendor']);
+    $data['total_admins'] = $this->gm->countRows('users', ['role' => 'admin']);
+    $data['total_all'] = $this->gm->countRows('users');
 
-        $this->loadView('users/index', $data);
+    $this->loadView('users/index', $data);
+}
+
+// AJAX: Get users with pagination, search, and filter
+public function get_users()
+{
+    if (!$this->input->is_ajax_request()) {
+        show_404();
     }
 
-    // AJAX: Get users with pagination, search, and filter
-    public function get_users()
-    {
-        if (!$this->input->is_ajax_request()) {
-            show_404();
-        }
+    $search = substr(trim($this->input->post('search', true)), 0, 100);
+    $role_filter = trim($this->input->post('role', true));
+    $page = max(1, (int) $this->input->post('page', true));
+    $limit = 10;
 
-        // Get inputs with sanitization
-        $search = trim($this->input->post('search', true));
-        $role_filter = trim($this->input->post('role', true));
-        $page = (int)$this->input->post('page', true) ?: 1;
-        $limit = 10;
-        $offset = ($page - 1) * $limit;
+    // Build query
+    $this->db->select('id, name, email, mobile, role, store_name, is_active, created_on');
+    $this->db->from('users');
 
-        // Build query
-        $this->db->select('*');
-        $this->db->from('users');
-
-        // Apply role filter
-        if (!empty($role_filter) && in_array($role_filter, ['admin', 'vendor', 'user'])) {
-            $this->db->where('role', $role_filter);
-        }
-
-        // Apply search filter
-        if (!empty($search)) {
-            $this->db->group_start();
-            $this->db->like('name', $search);
-            $this->db->or_like('email', $search);
-            $this->db->or_like('mobile', $search);
-            $this->db->group_end();
-        }
-
-        // Get total records for pagination
-        $total_records = $this->db->count_all_results('', false); // false = don't reset query
-        $total_pages = ceil($total_records / $limit);
-
-        // Get paginated results
-        $users = $this->db
-            ->order_by('id', 'ESC')
-            ->limit($limit, $offset)
-            ->get()
-            ->result();
-
-        // Generate HTML
-        $html = $this->generate_users_html($users, $page);
-
-        // Generate pagination
-        $pagination = $this->generate_pagination($page, $total_pages);
-
-        $response = [
-            'status' => true,
-            'html' => $html,
-            'pagination' => $pagination,
-            'total_records' => $total_records,
-            'current_page' => $page,
-            'total_pages' => $total_pages
-        ];
-
-        echo json_encode($response);
+    if (!empty($role_filter) && in_array($role_filter, ['admin', 'vendor', 'user'])) {
+        $this->db->where('role', $role_filter);
     }
 
-    // Generate users table HTML
+    if (!empty($search)) {
+        $this->db->group_start();
+        $this->db->like('name', $search);
+        $this->db->or_like('email', $search);
+        $this->db->or_like('mobile', $search);
+        $this->db->group_end();
+    }
+
+    // Total count BEFORE applying limit
+    $total_records = $this->db->count_all_results('', false);
+    $total_pages = max(1, ceil($total_records / $limit));
+
+    // Clamp page to valid range
+    if ($page > $total_pages) {
+        $page = $total_pages;
+    }
+
+    $offset = ($page - 1) * $limit;
+
+    // FIX: 'ESC' is invalid — was breaking the query / order
+    $users = $this->db
+        ->order_by('id', 'ASC')
+        ->limit($limit, $offset)
+        ->get()
+        ->result();
+
+    $html = $this->generate_users_html($users, $page);
+    $pagination = $this->generate_pagination($page, $total_pages);
+
+    $response = [
+        'status' => true,
+        'html' => $html,
+        'pagination' => $pagination,
+        'total_records' => $total_records,
+        'current_page' => $page,
+        'total_pages' => $total_pages
+    ];
+
+    $this->output
+        ->set_content_type('application/json')
+        ->set_output(json_encode($response));
+}  // Generate users table HTML
     private function generate_users_html($users, $current_page = 1)
     {
         if (empty($users)) {
@@ -272,77 +271,74 @@ class Users extends MY_Controller
     }
 
     // Generate pagination HTML (3 buttons + prev/next)
-    private function generate_pagination($current_page, $total_pages)
-    {
-        if ($total_pages <= 1) {
-            return '';
-        }
-
-        $html = '<nav aria-label="Users pagination">';
-        $html .= '<ul class="pagination pagination-sm justify-content-center mb-0">';
-
-        // Previous button
-        if ($current_page > 1) {
-            $html .= '
-                <li class="page-item">
-                    <a class="page-link" href="#" data-page="' . ($current_page - 1) . '">
-                        <i class="fas fa-chevron-left"></i>
-                    </a>
-                </li>
-            ';
-        }
-
-        // Calculate range for 3 buttons
-        $start_page = max(1, $current_page - 1);
-        $end_page = min($total_pages, $start_page + 2);
-
-        // Adjust start if we're near the end
-        if ($end_page - $start_page < 2) {
-            $start_page = max(1, $end_page - 2);
-        }
-
-        // Page buttons (max 3)
-        for ($i = $start_page; $i <= $end_page; $i++) {
-            $active = $i == $current_page ? 'active' : '';
-            $html .= '
-                <li class="page-item ' . $active . '">
-                    <a class="page-link" href="#" data-page="' . $i . '">' . $i . '</a>
-                </li>
-            ';
-        }
-
-        // Show last page if not visible
-        if ($end_page < $total_pages) {
-            if ($end_page < $total_pages - 1) {
-                $html .= '
-                    <li class="page-item disabled">
-                        <span class="page-link">...</span>
-                    </li>
-                ';
-            }
-            $html .= '
-                <li class="page-item">
-                    <a class="page-link" href="#" data-page="' . $total_pages . '">' . $total_pages . '</a>
-                </li>
-            ';
-        }
-
-        // Next button
-        if ($current_page < $total_pages) {
-            $html .= '
-                <li class="page-item">
-                    <a class="page-link" href="#" data-page="' . ($current_page + 1) . '">
-                        <i class="fas fa-chevron-right"></i>
-                    </a>
-                </li>
-            ';
-        }
-
-        $html .= '</ul>';
-        $html .= '</nav>';
-
-        return $html;
+  private function generate_pagination($current_page, $total_pages)
+{
+    if ($total_pages <= 1) {
+        return '';
     }
+
+    $html = '<nav aria-label="Users pagination" class="rc-pagination-nav">';
+    $html .= '<ul class="rc-pagination">';
+
+    // Previous button
+    if ($current_page > 1) {
+        $html .= '
+            <li class="rc-page-item">
+                <a class="rc-page-link" href="#" data-page="' . ($current_page - 1) . '">
+                    <i class="fas fa-chevron-left"></i>
+                </a>
+            </li>
+        ';
+    }
+
+    // Calculate range for 3 buttons
+    $start_page = max(1, $current_page - 1);
+    $end_page = min($total_pages, $start_page + 2);
+
+    if ($end_page - $start_page < 2) {
+        $start_page = max(1, $end_page - 2);
+    }
+
+    for ($i = $start_page; $i <= $end_page; $i++) {
+        $active = $i == $current_page ? 'active' : '';
+        $html .= '
+            <li class="rc-page-item ' . $active . '">
+                <a class="rc-page-link" href="#" data-page="' . $i . '">' . $i . '</a>
+            </li>
+        ';
+    }
+
+    // Last page + ellipsis
+    if ($end_page < $total_pages) {
+        if ($end_page < $total_pages - 1) {
+            $html .= '
+                <li class="rc-page-item disabled">
+                    <span class="rc-page-link rc-ellipsis">...</span>
+                </li>
+            ';
+        }
+        $html .= '
+            <li class="rc-page-item">
+                <a class="rc-page-link" href="#" data-page="' . $total_pages . '">' . $total_pages . '</a>
+            </li>
+        ';
+    }
+
+    // Next button
+    if ($current_page < $total_pages) {
+        $html .= '
+            <li class="rc-page-item">
+                <a class="rc-page-link" href="#" data-page="' . ($current_page + 1) . '">
+                    <i class="fas fa-chevron-right"></i>
+                </a>
+            </li>
+        ';
+    }
+
+    $html .= '</ul></nav>';
+
+    return $html;
+}
     public function add()
     {
         if ($this->input->method() == 'post') {

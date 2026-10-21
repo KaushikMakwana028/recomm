@@ -508,15 +508,18 @@
         align-items: center;
         gap: 0.5rem;
     }
+
     .rc-control-label {
         font-size: 0.85rem;
         font-weight: 600;
         color: #5f7c70;
     }
+
     .rc-searchable-dropdown {
         position: relative;
         width: 250px;
     }
+
     .rc-searchable-dropdown input {
         width: 100%;
         padding: 0.5rem 2.2rem 0.5rem 0.75rem;
@@ -526,6 +529,7 @@
         outline: none;
         background: #fff url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%235f7c70' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") no-repeat right 0.75rem center/10px 10px;
     }
+
     .rc-dropdown-menu {
         position: absolute;
         top: 100%;
@@ -541,9 +545,11 @@
         box-shadow: 0 4px 12px rgba(15, 92, 62, 0.1);
         margin-top: 2px;
     }
+
     .rc-dropdown-menu.show {
         display: block;
     }
+
     .rc-dropdown-item {
         padding: 0.6rem 0.75rem;
         font-size: 0.85rem;
@@ -551,11 +557,14 @@
         cursor: pointer;
         transition: background 0.15s ease;
     }
-    .rc-dropdown-item:hover, .rc-dropdown-item.active {
+
+    .rc-dropdown-item:hover,
+    .rc-dropdown-item.active {
         background: #f0faf4;
         color: var(--rc-green-600);
         font-weight: 600;
     }
+
     .rc-toggle-label {
         font-size: 0.85rem;
         font-weight: 600;
@@ -563,6 +572,7 @@
         cursor: pointer;
         user-select: none;
     }
+
     .rc-checkbox-custom {
         width: 1.1rem;
         height: 1.1rem;
@@ -570,6 +580,7 @@
         border: 2px solid var(--rc-green-500);
         cursor: pointer;
     }
+
     .rc-checkbox-custom:checked {
         background-color: var(--rc-green-500);
         border-color: var(--rc-green-500);
@@ -975,7 +986,7 @@
 
             // Populate statistics directly from Controller passed variable
             originalVendorData = <?= json_encode($vendor_stats) ?>;
-            
+
             // Populate searchable dropdown items
             originalVendorData.forEach(vendor => {
                 const item = document.createElement('div');
@@ -1014,13 +1025,13 @@
                     if (item) {
                         const val = item.getAttribute('data-value');
                         activeVendorFilter = val;
-                        
+
                         vendorSearchInput.value = val === 'all' ? '' : item.textContent;
                         vendorSearchInput.placeholder = item.textContent;
-                        
+
                         vendorDropdownMenu.querySelectorAll('.rc-dropdown-item').forEach(el => el.classList.remove('active'));
                         item.classList.add('active');
-                        
+
                         vendorDropdownMenu.classList.remove('show');
                         updateChart();
                     }
@@ -1068,8 +1079,7 @@
                     type: 'bar',
                     data: {
                         labels: labels,
-                        datasets: [
-                            {
+                        datasets: [{
                                 label: 'Revenue (₹)',
                                 data: revenues,
                                 backgroundColor: forest,
@@ -1109,7 +1119,10 @@
                                 position: 'top',
                                 labels: {
                                     padding: 10,
-                                    font: { size: 11, weight: '600' },
+                                    font: {
+                                        size: 11,
+                                        weight: '600'
+                                    },
                                     usePointStyle: true,
                                     color: '#0e2a1f'
                                 }
@@ -1142,7 +1155,9 @@
                                     display: true,
                                     text: 'Revenue (₹)',
                                     color: forest,
-                                    font: { weight: 'bold' }
+                                    font: {
+                                        weight: 'bold'
+                                    }
                                 },
                                 ticks: {
                                     color: '#5f7c70',
@@ -1161,7 +1176,9 @@
                                     display: true,
                                     text: 'Counts (Orders / Products)',
                                     color: gold,
-                                    font: { weight: 'bold' }
+                                    font: {
+                                        weight: 'bold'
+                                    }
                                 },
                                 ticks: {
                                     color: '#5f7c70',
@@ -1173,10 +1190,15 @@
                             },
                             x: {
                                 ticks: {
-                                    font: { size: 11, weight: '600' },
+                                    font: {
+                                        size: 11,
+                                        weight: '600'
+                                    },
                                     color: '#0e2a1f'
                                 },
-                                grid: { display: false }
+                                grid: {
+                                    display: false
+                                }
                             }
                         }
                     }

@@ -750,51 +750,67 @@
     }
 
     /* ---------- Pagination ---------- */
+    .rc-pagination-nav {
+        margin-top: 16px;
+    }
+
     .rc-pagination {
         display: flex;
-        align-items: center;
         justify-content: center;
-        gap: .4rem;
+        align-items: center;
+        gap: 6px;
         list-style: none;
-        margin: 1.25rem 0 0;
         padding: 0;
-        flex-wrap: wrap;
+        margin: 0;
     }
 
-    .rc-pagination .page-link {
-        min-width: 36px;
-        height: 36px;
-        padding: 0 .5rem;
+    .rc-page-item {
+        display: inline-flex;
+    }
+
+    .rc-page-link {
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 10px;
-        border: 1px solid var(--rc-line);
-        background: var(--rc-white);
-        color: var(--rc-ink);
-        font-size: .82rem;
-        font-weight: 600;
+        min-width: 36px;
+        height: 36px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid #e2e5ec;
+        background: #fff;
+        color: #333;
+        font-size: 14px;
+        font-weight: 500;
         text-decoration: none;
+        transition: all 0.2s ease;
         cursor: pointer;
-        transition: all .15s ease;
     }
 
-    .rc-pagination .page-link:hover {
-        border-color: var(--rc-green-500);
-        color: var(--rc-green-600);
+    .rc-page-link:hover {
+        background: #f1f3f9;
+        border-color: #c7cce0;
+        color: #000;
+        text-decoration: none;
     }
 
-    .rc-pagination .page-item.active .page-link {
-        background: linear-gradient(135deg, var(--rc-forest-800), var(--rc-green-500));
-        border-color: transparent;
+    .rc-page-item.active .rc-page-link {
+        background: #4f46e5;
+        /* change to match your primary brand color */
+        border-color: #4f46e5;
         color: #fff;
-        box-shadow: 0 6px 14px -4px rgba(15, 92, 62, .5);
     }
 
-    .rc-pagination .page-item.disabled .page-link {
-        opacity: .45;
-        cursor: not-allowed;
+    .rc-page-item.disabled .rc-page-link {
         pointer-events: none;
+        opacity: 0.5;
+        cursor: default;
+        background: transparent;
+        border: none;
+    }
+
+    .rc-ellipsis {
+        border: none;
+        background: transparent;
     }
 
     #resultsInfo {
@@ -1066,7 +1082,7 @@
 
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script>
-    $(document).ready(function() {
+    $(document).ready(function () {
         let currentPage = 1;
         let searchQuery = '';
         let roleFilter = '';
@@ -1075,10 +1091,10 @@
 
         loadUsers();
 
-        $('#searchInput').on('keyup', function() {
+        $('#searchInput').on('keyup', function () {
             const value = $(this).val().trim();
             clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(function() {
+            searchTimeout = setTimeout(function () {
                 searchQuery = value;
                 currentPage = 1;
                 loadUsers();
@@ -1086,7 +1102,7 @@
             }, 500);
         });
 
-        $('#roleFilter').on('change', function() {
+        $('#roleFilter').on('change', function () {
             roleFilter = $(this).val();
             currentPage = 1;
             loadUsers();
@@ -1094,7 +1110,7 @@
             updateTableTitle();
         });
 
-        $('#clearFilters').click(function() {
+        $('#clearFilters').click(function () {
             $('#searchInput').val('');
             $('#roleFilter').val('');
             searchQuery = '';
@@ -1105,7 +1121,7 @@
             updateTableTitle();
         });
 
-        $(document).on('click', '.rc-pagination a.page-link', function(e) {
+        $(document).on('click', '.rc-pagination a.rc-page-link', function (e) {
             e.preventDefault();
             const page = $(this).data('page');
             if (page) {
@@ -1128,7 +1144,7 @@
                     role: roleFilter
                 },
                 dataType: 'json',
-                success: function(response) {
+                success: function (response) {
                     if (response.status) {
                         $('#usersTableBody').html(response.html);
                         $('#paginationContainer').html(response.pagination);
@@ -1153,17 +1169,17 @@
                         showError('Failed to load users');
                     }
                 },
-                error: function(xhr) {
+                error: function (xhr) {
                     console.error('AJAX Error:', xhr);
                     showError('Something went wrong. Please refresh the page.');
                 },
-                complete: function() {
+                complete: function () {
                     hideLoading();
                 }
             });
         }
 
-        $(document).on('change', '.status-toggle', function() {
+        $(document).on('change', '.status-toggle', function () {
             const toggle = $(this);
             const id = toggle.data('id');
             const status = toggle.is(':checked') ? 1 : 0;
@@ -1184,23 +1200,23 @@
                     status: status
                 },
                 dataType: 'json',
-                success: function(response) {
+                success: function (response) {
                     if (!response.status) {
                         alert(response.message || 'Failed to update status');
                         toggle.prop('checked', !status);
                     }
                 },
-                error: function(xhr) {
+                error: function (xhr) {
                     alert('Something went wrong. Please try again.');
                     toggle.prop('checked', !status);
                 },
-                complete: function() {
+                complete: function () {
                     toggle.prop('disabled', false);
                 }
             });
         });
 
-        $(document).on('click', '.btn-delete', function() {
+        $(document).on('click', '.btn-delete', function () {
             const id = $(this).data('id');
             const name = $(this).data('name');
 
