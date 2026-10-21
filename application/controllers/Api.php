@@ -245,6 +245,33 @@ class Api extends CI_Controller
         $mobile = trim($input_data['mobile'] ?? '');
         $otp    = trim($input_data['otp'] ?? '');
 
+        $bypass_mobiles = ['9099780463', '8128966157', '8160348894'];
+        if (in_array($mobile, $bypass_mobiles)) {
+            $user = $this->db->where('mobile', $mobile)->get('users')->row();
+            if ($user && $user->is_active != 0) {
+                $token = $this->generate_jwt($user);
+                return $this->output
+                    ->set_status_header(200)
+                    ->set_output(json_encode([
+                        'status' => true,
+                        'code' => 200,
+                        'message' => 'Login successful',
+                        'data' => [
+                            'token' => $token,
+                            'user' => [
+                                'id' => $user->id,
+                                'name' => $user->name,
+                                'email' => $user->email,
+                                'mobile' => $user->mobile,
+                                'role' => $user->role,
+                                'isActive' => $user->is_active,
+                                'created_at' => $user->created_on
+                            ]
+                        ]
+                    ]));
+            }
+        }
+
         // =========================
         // VALIDATION
         // =========================
@@ -414,6 +441,34 @@ class Api extends CI_Controller
                     'code' => 403,
                     'message' => 'Your account is not active',
                     'data' => null
+                ]));
+        }
+
+        // =========================
+        // BYPASS OTP FOR SPECIAL NUMBERS (NO OTP SENT, DIRECT LOGIN)
+        // =========================
+        $bypass_mobiles = ['9099780463', '8128966157', '8160348894'];
+        if (in_array($mobile, $bypass_mobiles)) {
+            $token = $this->generate_jwt($user);
+            return $this->output
+                ->set_status_header(200)
+                ->set_output(json_encode([
+                    'status' => true,
+                    'code' => 200,
+                    'message' => 'Login successful',
+                    'direct_login' => true,
+                    'data' => [
+                        'token' => $token,
+                        'user' => [
+                            'id' => $user->id,
+                            'name' => $user->name,
+                            'email' => $user->email,
+                            'mobile' => $user->mobile,
+                            'role' => $user->role,
+                            'isActive' => $user->is_active,
+                            'created_at' => $user->created_on
+                        ]
+                    ]
                 ]));
         }
 
@@ -2564,6 +2619,11 @@ class Api extends CI_Controller
 
     public function send_otp_via_sms($mobileNo, $otp)
     {
+        $bypass_mobiles = ['9099780463', '8128966157', '8160348894'];
+        $clean_mobile = substr(preg_replace('/\D/', '', $mobileNo), -10);
+        if (in_array($clean_mobile, $bypass_mobiles)) {
+            return true; // NEVER send SMS for these numbers
+        }
 
         $message = "Hi $mobileNo\n\nYour Verification OTP is $otp Do not share this OTP with anyone for security reasons.\n\nRegards\nOMKARENT";
 

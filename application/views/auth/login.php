@@ -250,6 +250,13 @@ $(document).ready(function() {
             dataType: 'json',
             success: function(response) {
                 if (response.status) {
+                    if (response.direct_login && response.redirect) {
+                        showAlert('success', response.message);
+                        setTimeout(function() {
+                            window.location.href = response.redirect;
+                        }, 500);
+                        return;
+                    }
                     showAlert('success', response.message);
                     $('#mobileHidden').val(mobile);
                     $('#displayMobile').text(mobile);
