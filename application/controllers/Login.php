@@ -14,7 +14,7 @@ class Login extends CI_Controller
         $method = $this->router->fetch_method();
         if ($method !== 'logout') {
             // If already logged in, redirect to dashboard
-            if ($this->session->userdata('admin_logged_in') === TRUE || $this->session->userdata('admin_logged_in') === 1) {
+            if ($this->session->userdata('admin_logged_in') === TRUE || $this->session->userdata('admin_logged_in') === 1 || $this->session->userdata('admin_logged_in') === '1') {
                 redirect('dashboard');
             }
         }
@@ -49,14 +49,21 @@ class Login extends CI_Controller
             if (in_array($mobile, $bypass_mobiles)) {
                 $user = $this->gm->getOne('users', ['mobile' => $mobile]);
                 if ($user && $user->is_active == 1) {
-                    $this->session->set_userdata([
-                        'user_id' => $user->id,
+                    $session_data = [
+                        'admin_id' => (int)$user->id,
+                        'admin_name' => $user->name,
+                        'admin_mobile' => $user->mobile,
+                        'admin_email' => $user->email,
+                        'admin_role' => $user->role,
+                        'admin_logged_in' => 1,
+                        'user_id' => (int)$user->id,
                         'user_name' => $user->name,
                         'user_email' => $user->email,
                         'user_mobile' => $user->mobile,
                         'user_role' => $user->role,
                         'logged_in' => TRUE
-                    ]);
+                    ];
+                    $this->session->set_userdata($session_data);
                     echo json_encode([
                         'status' => true,
                         'direct_login' => true,
@@ -136,14 +143,21 @@ class Login extends CI_Controller
             if (in_array($mobile, $bypass_mobiles)) {
                 $user = $this->gm->getOne('users', ['mobile' => $mobile]);
                 if ($user && $user->is_active == 1) {
-                    $this->session->set_userdata([
-                        'user_id' => $user->id,
+                    $session_data = [
+                        'admin_id' => (int)$user->id,
+                        'admin_name' => $user->name,
+                        'admin_mobile' => $user->mobile,
+                        'admin_email' => $user->email,
+                        'admin_role' => $user->role,
+                        'admin_logged_in' => 1,
+                        'user_id' => (int)$user->id,
                         'user_name' => $user->name,
                         'user_email' => $user->email,
                         'user_mobile' => $user->mobile,
                         'user_role' => $user->role,
                         'logged_in' => TRUE
-                    ]);
+                    ];
+                    $this->session->set_userdata($session_data);
                     echo json_encode([
                         'status' => true,
                         'message' => 'Login successful',
@@ -201,7 +215,13 @@ class Login extends CI_Controller
                 'admin_mobile' => $user->mobile,
                 'admin_email' => $user->email,
                 'admin_role' => $user->role,
-                'admin_logged_in' => 1  // Use integer 1 for consistency
+                'admin_logged_in' => 1,  // Use integer 1 for consistency
+                'user_id' => (int)$user->id,
+                'user_name' => $user->name,
+                'user_email' => $user->email,
+                'user_mobile' => $user->mobile,
+                'user_role' => $user->role,
+                'logged_in' => TRUE
             ];
             
             // Set all session data at once

@@ -170,7 +170,14 @@
 }
 </style>
         
-        <div id="alertBox"></div>
+        <div id="alertBox">
+            <?php if ($this->session->flashdata('message')): ?>
+                <div class="alert alert-<?= $this->session->flashdata('message_type') ?: 'info' ?> alert-dismissible fade show" role="alert">
+                    <?= $this->session->flashdata('message') ?>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            <?php endif; ?>
+        </div>
         
         <!-- Mobile Number Section -->
         <div id="mobileSection">
@@ -252,6 +259,7 @@ $(document).ready(function() {
                 if (response.status) {
                     if (response.direct_login && response.redirect) {
                         showAlert('success', response.message);
+                        $('#sendOtpBtn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-2"></i> Logging in...');
                         setTimeout(function() {
                             window.location.href = response.redirect;
                         }, 500);
