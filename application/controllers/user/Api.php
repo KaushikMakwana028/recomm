@@ -4135,6 +4135,7 @@ class Api extends CI_Controller
         }
 
         $nearby_stores = $this->get_nearby_stores_data($cust_lat, $cust_lon, 12);
+        $hero = $this->fetch_hero_data();
 
         return $this->output
             ->set_status_header(200)
@@ -4143,6 +4144,7 @@ class Api extends CI_Controller
                 'code' => 200,
                 'message' => 'Home data fetched successfully',
                 'data' => [
+                    'hero'                 => $hero,
                     'categories'           => $categories,
                     'stores'               => $nearby_stores,
                     'products'             => $discovery['products'],
@@ -4151,6 +4153,79 @@ class Api extends CI_Controller
                     'no_nearby_vendors'    => (bool)($discovery['no_nearby_vendors'] ?? false)
                 ]
             ]));
+    }
+
+
+    /**
+     * Get Hero section text & active slider images (Public - No Token required)
+     */
+    public function get_hero_section()
+    {
+        $this->ensureMethod('GET');
+        $this->output->set_content_type('application/json');
+
+        $hero = $this->fetch_hero_data();
+
+        return $this->output
+            ->set_status_header(200)
+            ->set_output(json_encode([
+                'status'  => true,
+                'code'    => 200,
+                'message' => 'Hero section fetched successfully',
+                'data'    => $hero
+            ]));
+    }
+
+    private function fetch_hero_data()
+    {
+        $content = $this->db->where('id', 1)->get('hero_section')->row();
+        if (!$content) {
+            $content = (object)[
+                'id'          => 1,
+                'title'       => 'Delicious Food & Beverages',
+                'subtitle'    => 'Delivered to Your Door',
+                'description' => 'Discover premium quality food and beverages. Fresh, organic, and delivered with care.',
+                'btn_text'    => 'Shop Now',
+                'btn_link'    => '/products',
+                'btn2_text'   => 'Explore Products',
+                'btn2_link'   => '#featured',
+            ];
+        }
+
+        $sliders_query = $this->db
+            ->where('is_active', 1)
+            ->order_by('sort_order', 'ASC')
+            ->order_by('id', 'DESC')
+            ->get('hero_sliders')
+            ->result();
+
+        $sliders = [];
+        foreach ($sliders_query as $slide) {
+            $image_url = filter_var($slide->image, FILTER_VALIDATE_URL) 
+                ? $slide->image 
+                : base_url($slide->image);
+
+            $sliders[] = [
+                'id'         => (int)$slide->id,
+                'title'      => $slide->title ?? '',
+                'image_url'  => $image_url,
+                'sort_order' => (int)$slide->sort_order
+            ];
+        }
+
+        if (empty($sliders)) {
+            $sliders[] = [
+                'id'         => 0,
+                'title'      => 'Fresh Food & Groceries',
+                'image_url'  => 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=700',
+                'sort_order' => 1
+            ];
+        }
+
+        return [
+            'content' => $content,
+            'sliders' => $sliders
+        ];
     }
 
     /**

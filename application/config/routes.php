@@ -242,3 +242,14 @@ $route['api/user/download_invoice/(:num)'] = 'user/api/order_invoice/$1';
 
 $route['api/user/test_token'] = 'user/api/test_token';
 $route['api/user/logout'] = 'user/api/logout';
+
+// Hero Section Admin Routes
+$route['hero-section'] = 'hero_section/index';
+$route['hero-section/update-content'] = 'hero_section/update_content';
+$route['hero-section/add-slide'] = 'hero_section/add_slide';
+$route['hero-section/edit-slide/(:num)'] = 'hero_section/edit_slide/$1';
+$route['hero-section/delete-slide/(:num)'] = 'hero_section/delete_slide/$1';
+$route['hero-section/toggle-status'] = 'hero_section/toggle_status';
+
+// Hero Section User API Route
+$route['api/user/get_hero_section'] = 'user/api/get_hero_section';

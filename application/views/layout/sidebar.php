@@ -361,6 +361,12 @@
             </a>
         </li>
         <li>
+            <a href="<?= base_url('hero-section') ?>" class="<?= ($this->uri->segment(1) == 'hero-section' || $this->uri->segment(1) == 'hero_section') ? 'active' : '' ?>">
+                <i class="fas fa-images"></i>
+                <span>Hero Section</span>
+            </a>
+        </li>
+        <li>
             <a href="<?= base_url('orders') ?>" class="<?= $this->uri->segment(1) == 'orders' ? 'active' : '' ?>">
                 <i class="fas fa-shopping-cart"></i>
                 <span>Orders</span>
